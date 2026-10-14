@@ -9,7 +9,7 @@ import sys
 import tempfile
 
 from night_shift_pilot.router import TaskSpec, synthetic_profiles
-from night_shift_pilot.simulation import Scenario, benchmark, markdown_report, simulate, synthetic_scenarios, synthetic_workload
+from night_shift_pilot.simulation import Scenario, _choose, benchmark, comparable_costs, markdown_report, simulate, synthetic_scenarios, synthetic_workload
 
 
 def backend_task(**overrides) -> TaskSpec:
@@ -72,9 +72,41 @@ class RouterSimulationTests(unittest.TestCase):
             self.assertEqual([result["strategy"] for result in scenario["results"]],
                 ["intelligent_router", "fixed_codex_mock", "capability_first"])
             self.assertTrue(all(result["handled"] + result["no_execution"] == 100 for result in scenario["results"]))
+            self.assertTrue(all("comparable_costs_vs_intelligent" in result for result in scenario["results"]))
         rendered = markdown_report(report)
         self.assertIn("Synthetic Intelligent Engine Router benchmark", rendered)
         self.assertIn("NO_EXECUTION", rendered)
+
+    def test_common_task_cost_comparison_never_treats_missing_coverage_as_savings(self):
+        scenario = synthetic_scenarios()[1]
+        intelligent = simulate(scenario, "intelligent_router")
+        fixed = simulate(scenario, "fixed_codex_mock")
+        comparison = comparable_costs(fixed, intelligent)
+        self.assertLessEqual(comparison["common_handled_task_count"], fixed.handled)
+        self.assertLessEqual(comparison["common_handled_task_count"], intelligent.handled)
+        self.assertFalse(comparison["full_coverage_cost_comparison_valid"])
+        self.assertEqual(comparison["full_coverage_cost_comparison_reason"], "NOT_VALID_DIFFERENT_COVERAGE_OR_ZERO_BASELINE_COST")
+
+    def test_scenario_c_differs_from_b_in_engine_suitability_not_only_capacity(self):
+        scenario_b, scenario_c = synthetic_scenarios()[1:]
+        profiles_b = {profile.engine_id: profile for profile in scenario_b.profiles}
+        profiles_c = {profile.engine_id: profile for profile in scenario_c.profiles}
+        self.assertNotEqual(profiles_b["codex-mock"].supported_kinds, profiles_c["codex-mock"].supported_kinds)
+        self.assertNotEqual(profiles_b["codex-mock"].max_complexity, profiles_c["codex-mock"].max_complexity)
+        self.assertNotEqual(profiles_b["claude-mock"].capabilities, profiles_c["claude-mock"].capabilities)
+
+    def test_capability_first_candidate_audit_never_keeps_router_selected_reason_when_skipped(self):
+        cheap = replace(synthetic_profiles()[0], engine_id="cheap", billing_kind="mock_no_charge", synthetic_cost_usd=0, latency_rank=2)
+        fast = replace(cheap, engine_id="fast", billing_kind="synthetic_paid_mock", synthetic_cost_usd=1, latency_rank=1)
+        selected = _choose("capability_first", backend_task(max_synthetic_budget_usd=1, paid_call_approved=True), (cheap, fast))
+        repeated = _choose("capability_first", backend_task(max_synthetic_budget_usd=1, paid_call_approved=True), (fast, cheap))
+        self.assertEqual(selected, repeated)
+        candidates = {candidate.engine_id: candidate for candidate in selected.candidates}
+        self.assertEqual(candidates["fast"].outcome, "SELECTED")
+        self.assertEqual(candidates["fast"].reasons, ("CAPABILITY_FIRST_ELIGIBLE",))
+        self.assertEqual(candidates["cheap"].outcome, "SKIPPED")
+        self.assertEqual(candidates["cheap"].reasons, ("CAPABILITY_FIRST_ELIGIBLE_NOT_CHOSEN",))
+        self.assertEqual(selected.fallback_engine_ids, ("cheap",))
 
     def test_cli_writes_local_machine_and_markdown_reports(self):
         script = Path("scripts/run_synthetic_router_simulation.py").resolve()

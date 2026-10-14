@@ -18,7 +18,7 @@ Three scenario fixtures are evaluated:
 | --- | --- |
 | A | Equal no-charge mock costs and equal capacity. |
 | B | Different synthetic costs; every candidate is a paid mock requiring approval. |
-| C | Different synthetic costs, capacities, and task fit. |
+| C | Different synthetic costs, capacities, supported task classes, capabilities, and complexity limits. |
 
 Credits, subscriptions, quotas, and API billing are not converted or compared as
 real money. Synthetic USD units only exercise deterministic budget gates.
@@ -35,6 +35,18 @@ No execution, cost, or capacity is recorded for `NO_EXECUTION`. A fallback is a
 selection that differs from the same strategy's capacity-restored preferred
 engine. Capacity exhaustion and budget/approval blocks are separately reported,
 so missing coverage cannot be presented as savings.
+
+The JSON and Markdown report retain total cost and coverage, but calculate a
+cost delta or percentage only on the exact synthetic task IDs handled by both the
+strategy and Intelligent Router. A percentage is valid only when that common set
+is non-empty and the Intelligent Router's common-task cost is non-zero. A total
+cost percentage is valid only with identical handled-task coverage and a non-zero
+baseline. Otherwise the report explicitly marks the percentage invalid; a lower
+total with fewer handled tasks is not presented as a saving.
+
+Candidate audit records are strategy-consistent: selected candidates carry the
+strategy's selection reason, eligible but non-chosen candidates carry an explicit
+skip reason, and refused candidates retain their router refusal reasons.
 
 ## Run locally
 
