@@ -1,72 +1,63 @@
-# Codex-first technical feasibility v0.6
+# Codex subscription-only technical feasibility v0.6
 
-## Scope and result
+## Decision
 
-This is a research and offline-design record, verified on **2026-10-14**. It
-does not create an OpenAI account, project, credential, session, request,
-provider client, or network connection. All existing live-execution paths in
-this public pilot remain denied.
+Verified on **2026-10-14**. KAYA's selected policy is **subscription-only**:
+use only an already included Codex/ChatGPT allowance. API keys, API billing,
+pay-as-you-go, purchased credits, paid resets, upgrades, other accounts and
+cost-increasing automatic fallback are prohibited.
 
-**Proposed future route:** one separately approved [Agents API](https://developers.openai.com/api/docs/guides/agents-api/overview)
-session using the OpenAI-managed Codex harness, `environment.type: "none"`,
-no configured tools, no remote MCP servers, no skills, no vault IDs, no files,
-and no follow-up turn. Without an environment, built-in Bash, apply-patch,
-workspace files and executor MCPs are unavailable. [Architecture](https://developers.openai.com/api/docs/guides/agents-api/architecture)
+Codex is officially available through ChatGPT-plan clients such as the desktop
+app, Codex CLI, IDE extension and web, subject to plan, rollout and workspace
+settings. This is separate from API-key usage, which uses API pricing.
+[ChatGPT pricing](https://learn.chatgpt.com/docs/pricing)
 
-The route is technically plausible but **not approved for execution**. Model
-availability, Agents API entitlement, account limits and exact request schemas
-remain account-dependent checks.
+**Current result: NO-GO for unmanaged Night Shift execution.** The official
+material documents account-bound quota surfaces, but does not establish a
+safe, independently verifiable, unattended controller integration for this
+public pilot. Only a later, separately approved, manually supervised local
+Codex client path may be considered. No provider is integrated by v0.6.
 
-## Evidence status
+## Official evidence and limits
 
-| Topic | Status | Evidence or required check |
+| Topic | Status | Evidence or implication |
 | --- | --- | --- |
-| Managed harness and durable sessions | Officially confirmed | [Agents overview](https://developers.openai.com/api/docs/guides/agents-api/overview) |
-| No execution environment | Officially confirmed | `environment.type: "none"` needs initial input and has no built-in shell/workspace. [Reference](https://developers.openai.com/api/reference/python/resources/beta/subresources/agents/subresources/sessions/methods/create) |
-| Required session permissions | Officially confirmed | `api.agents.read`, `api.agents.write`, `api.responses.write`. [Quickstart](https://developers.openai.com/api/docs/guides/agents-api/quickstart) |
-| Session states, cancellation and deletion | Officially confirmed | [Sessions](https://developers.openai.com/api/docs/guides/agents-api/sessions), [delete](https://developers.openai.com/api/reference/resources/beta/subresources/agents/subresources/sessions/methods/delete) |
-| Usage data | Officially confirmed, best-effort | It may be null or later change. [Reference](https://developers.openai.com/api/reference/python/resources/beta/subresources/agents/subresources/sessions/methods/create) |
-| Rate limits/retries | Officially confirmed, values account-dependent | Obey `Retry-After`; do not retry quota/billing errors. [Rate limits](https://developers.openai.com/api/docs/guides/rate-limits) |
-| `gpt-5.3-codex` in the intended project | Account-dependent | Verify model entitlement through an approved account check. |
-| Exact retention/deletion completion SLA | Not verified | Obtain account/provider confirmation before non-synthetic content. |
+| Subscription versus API | Confirmed distinct | API token prices must not estimate included subscription work. [Pricing](https://learn.chatgpt.com/docs/pricing) |
+| Supported subscription clients | Confirmed | Desktop, CLI, IDE extension and web availability varies by plan/rollout. [Pricing](https://learn.chatgpt.com/docs/pricing) |
+| Quota visibility | Confirmed account-bound | Usage dashboard and active CLI `/status` are documented. [Pricing](https://learn.chatgpt.com/docs/pricing) |
+| Quota shape | Confirmed variable | Five-hour and weekly windows may apply; task/model/plan affect consumption. Fixed message counts are not reliable. [Pricing](https://learn.chatgpt.com/docs/pricing) |
+| App Server quota events | Confirmed interface, not approved integration | It documents rate-limit reads/updates and reset timestamps, but requires authenticated Codex services and has not been security-reviewed for unattended KAYA control. [App Server](https://learn.chatgpt.com/docs/app-server) |
+| Unmanaged subscription automation | Not verified | Therefore blocked rather than inferred. |
+| Claude subscription automation | Not investigated or integrated | The same generic policy applies; no provider-specific claim is made. |
 
-## Proposed first paid proof
+## Required capacity states
 
-The immutable synthetic input is:
+The pure offline `subscription_policy.py` represents only these states:
 
-```json
-{"schema_version":"synthetic-validator-v1","records":[{"id":"a","state":"active","priority":1},{"id":"a","state":"archived","priority":2},{"id":"b","state":"active","priority":0}],"required_inconsistencies":["duplicate_id","archived_nonzero_priority","invalid_priority"]}
-```
+| State | Required behavior |
+| --- | --- |
+| `AVAILABLE` | A trusted provider capacity statement no older than the policy's 300-second TTL and explicit manual start authorization are both present. |
+| `LIMIT_REACHED_5H` / `LIMIT_REACHED_WEEKLY` | Start no work; checkpoint and report `WAITING_FOR_RESET`. |
+| `QUOTA_UNKNOWN` | Start no work; require human review. |
+| `PAUSED` | Start no work; retain checkpoint. |
+| `WAITING_FOR_RESET` | Informational follow-up state only; never auto-resumes. |
+| `MANUAL_REVIEW_REQUIRED` | Resolve quota, policy or authorization evidence before any new task. |
 
-The task asks only for a JSON response of the following exact shape:
+At reset time, the controller must not resume from a clock calculation. It needs
+a new reliable capacity read and a new valid human authorization. Any visible
+credit, reset, upgrade, API or fallback path is a policy violation and blocks.
 
-```json
-{"schema_version":"synthetic-validator-result-v1","findings":["duplicate_id","archived_nonzero_priority","invalid_priority"],"status":"VALIDATED"}
-```
+## First practice task, if manually approved later
 
-Acceptance requires valid JSON; exactly those three lexical findings; no extra
-keys; status `VALIDATED`; no tool/action event; one session and turn; and
-completion within **30 seconds** of the private controller's monotonic deadline.
-Malformed/extra output, timeout, cancellation, missing usage, tool request or
-unavailable model fails the proof and does not automatically retry.
+The fixed synthetic task remains a JSON validator with no KAYA data, repository,
+file, shell, web, MCP, tool or follow-up task. It checks exactly three known
+inconsistencies and returns a deterministic JSON object. Its immutable input,
+expected result, 30-second maximum duration and local deterministic review are
+recorded in the prior design history. It is not scheduled, submitted or run by
+this branch.
 
-The controller binds the task SHA-256 to a single-use ExecutionGrant. A local,
-deterministic JSON reviewer compares the response. It records sanitized status
-and digests only, requests session deletion after review, and retains the budget
-reservation if provider completion or cost is uncertain.
-
-## Operational constraints
-
-```text
-human approval -> private controller -> authenticated one-use grant
-                                           |
-                                  Agents API, no environment/tools
-                                           |
-                                     structured JSON only
-                                           v
-                           deterministic local reviewer -> human report
-```
-
-No repository, filesystem, shell, web, connector, MCP server, function tool,
-skill, follow-up turn, publication, merge or deployment belongs in this proof.
-The router remains advisory. `idle` is never treated as success by itself.
+For future Claude subscription access, use the identical default-deny contract:
+provider-specific official quota evidence, subscription-only confirmation,
+explicit manual authorization, checkpoint on any limit/unknown result, and no
+automatic fallback. Until those are independently documented, its state is
+`QUOTA_UNKNOWN` and execution is NO-GO.

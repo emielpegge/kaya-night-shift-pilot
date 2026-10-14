@@ -1,37 +1,44 @@
-# Codex-first v0.6 Go/No-Go
+# Codex subscription-only v0.6 Go/No-Go
 
-## Current result: NO-GO
+## Current decision: NO-GO for unmanaged execution
 
-v0.6 creates a synthetic proof design only. It does not authorize a provider
-request. Every gate needs independent verification and separate human approval;
-any missing, stale, conflicting or unverified gate remains **NO-GO**.
+KAYA permits only already included subscription allowance. This excludes every
+API or paid-continuation route. The official Codex surfaces support account-plan
+use and show account-specific usage, but v0.6 has no proven, security-reviewed,
+unattended subscription automation path. Therefore Night Shift cannot start or
+resume a provider task on its own.
 
-| Gate | Current evidence | Required for GO |
+| Gate | Current status | Required for a future manually supervised synthetic test |
 | --- | --- | --- |
-| Integration path | Managed Agents API/no-environment documentation verified. | Recheck current official documentation and product status. |
-| Model | `gpt-5.3-codex` has official pricing. | Verify model access in the chosen Agents API project. |
-| Project/identity | Scoped RBAC and service-account docs exist. | Private project and proven least-privilege non-owner identity. |
-| Financial limits | Offline low/expected/high estimates exist. | Approved exact task/model caps and rechecked price/project limits. |
-| Private runtime | Paper design only. | Reviewed controller, secret boundary, default-deny egress and no public linkage. |
-| Grants/accounting | Inert local contracts exist. | Authenticated grant, atomic durable reservation/reconciliation and replay controls. |
-| Emergency stop | Mock stop and live denial exist. | Private stop/cancellation/unknown-outcome drills pass. |
-| Privacy | Synthetic-only scope defined. | Explicit approval of US-only/no-ZDR implication; no KAYA data. |
-| Security review | Not performed. | Independent sign-off on implementation, logging, retention and incidents. |
-| Specific paid test | Fixed JSON validator proposed. | Human approves digest, 30-second deadline, one turn, no tools and no auto-retry. |
+| Subscription path | Official client paths documented. | Named official client, owner account and plan eligibility confirmed. |
+| API separation | Confirmed. | No API key, billing, credits, reset, upgrade or fallback option is configured. |
+| Capacity | Dashboard/CLI/App Server surfaces documented, account-specific. | Fresh authoritative capacity state: `AVAILABLE`; no inferred quota from time or history. |
+| Limit handling | Policy and offline tests exist. | Checkpoint and block on every non-`AVAILABLE` state; no auto-resume. |
+| Authorization | Design only. | Separate human start authorization bound to one synthetic task. |
+| Privacy | Synthetic-only boundary designed. | Confirm no KAYA/private content is presented to the client. |
+| Safety review | Not performed. | Independent review of manual process, retention and account handling. |
+| Claude | Not integrated. | Equivalent official subscription/quota/privacy evidence; otherwise remain `QUOTA_UNKNOWN`. |
 
-## Required future record
+## State policy
 
-The private controller records approval references, contract/policy versions,
-task digest, provider/model, grant/request/idempotency IDs, stop state, budget
-reservation, private session ID, terminal state, sanitized usage, deterministic
-review, deletion request, reconciliation and human closeout. This public
-repository stores none of the private identifiers or raw content.
+| State | New work | Recovery |
+| --- | --- | --- |
+| `AVAILABLE` | Only after explicit human authorization. | One bounded synthetic task only. |
+| `LIMIT_REACHED_5H` | Blocked. | Checkpoint; `WAITING_FOR_RESET`. |
+| `LIMIT_REACHED_WEEKLY` | Blocked. | Checkpoint; `WAITING_FOR_RESET`. |
+| `QUOTA_UNKNOWN` | Blocked. | `MANUAL_REVIEW_REQUIRED`. |
+| `PAUSED` | Blocked. | Human explicitly unpauses only after fresh capacity check. |
+| `WAITING_FOR_RESET` | Blocked. | Never auto-resumes; fresh read plus new authorization required. |
+| `MANUAL_REVIEW_REQUIRED` | Blocked. | Resolve evidence/policy conflict without a paid workaround. |
 
-## Stop criteria
+## Permanent no-cost constraints
 
-Stop before provider start if any gate is not GO. Stop and contain after start
-on required action, unexpected tool/connector event, model mismatch, malformed
-output, timeout, cancellation ambiguity, missing usage, pricing change, budget
-inconsistency, security alert or emergency stop. Mark uncertain outcome unknown;
-do not retry, release budget, publish, merge or run another task without new
-human approval.
+No provider action may buy or consume credits, purchase a reset, trigger a
+checkout, upgrade a plan, choose an API key, use pay-as-you-go, use another
+account or select a provider/model fallback that costs more. A UI option's
+availability never grants KAYA permission to use it.
+
+The public pilot stays mock-only. `NIGHT_SHIFT_STOP` and existing live denials
+remain unchanged. A future exception to this policy requires a new, explicit
+owner decision and a separate security review; it cannot be inferred from a
+quota reset or from an existing subscription.

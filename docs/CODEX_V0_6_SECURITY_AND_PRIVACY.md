@@ -1,55 +1,56 @@
-# Codex-first security and privacy feasibility v0.6
+# Codex subscription-only security and privacy feasibility v0.6
 
 ## Boundary
 
-Verified on **2026-10-14**. This public repository remains unable to execute a
-provider request and must never contain credentials, private tasks, KAYA source,
-account identifiers, raw provider output or private-runtime configuration.
+Verified on **2026-10-14**. This public pilot may not execute an AI task,
+authenticate to a provider, retain an account token, query account quota, or
+start a workflow. It must never contain private source, KAYA data, credentials,
+account identifiers, raw model output or subscription telemetry.
 
-## Future private design
+The subscription-only policy prohibits API keys and API billing. Official
+documentation distinguishes account-plan usage from API-key usage, which is
+billed separately. [ChatGPT pricing](https://learn.chatgpt.com/docs/pricing)
+
+## Future manual-only boundary
 
 | Boundary | Required control |
 | --- | --- |
-| Project | Separate private OpenAI project for synthetic proof only; no KAYA data or production project. |
-| Identity | Least-privilege project service account; no workload owner/admin role. |
-| Credential | Prefer short-lived workload-identity token if supported; otherwise scoped, expiring server-side key in an approved secret manager. |
-| Controller | Authenticated private app validates allowlists, task digest, approvals, expiry, one-use grant, budget and stop. |
-| Provider | Fixed `environment.type: "none"`; no tools/MCP/vault/files; one text-only turn; default-deny egress except approved API endpoint. |
-| Output | Private deterministic JSON review; only sanitized status/digests in audit; no automatic writeback. |
+| Identity | A human signs into an official Codex subscription client; no shared, delegated or alternate-account workaround. |
+| Capacity | Before a task, the human checks the official usage surface. The controller receives only an approved, sanitized capacity statement, never account authentication. |
+| Task | Immutable fully synthetic artifact; no KAYA data, repository, shell, web, MCP, files or tool access. |
+| Policy | API billing, credits, paid reset, upgrade and automatic paid fallback are all hard blocks. |
+| Start | Explicit human authorization is required after capacity confirmation; no scheduler or background retry. |
+| Pause | On a limit, unknown quota or incident: checkpoint, stop new work and request manual review. |
+| Output | Deterministic local review, no automatic publication, merge, deployment or follow-up task. |
 
-OpenAI documents bearer API keys or workload-identity tokens, server-side secret
-handling, project-scoped RBAC and service accounts. [Authentication](https://developers.openai.com/api/reference/overview), [RBAC](https://developers.openai.com/api/docs/guides/rbac), [service accounts](https://developers.openai.com/api/docs/guides/terraform/service-accounts)
+`subscription_policy.py` is an inert offline representation of those controls.
+It does not authenticate, read a quota, execute, resume, buy capacity or contact
+Codex/Claude. The Codex App Server documentation is not treated as authorization
+for unattended KAYA use even though it documents authenticated quota information.
+[App Server](https://learn.chatgpt.com/docs/app-server)
 
-## Incident and reconciliation requirements
+## Incident handling
 
-- A durable single-use ExecutionGrant binds task digest, provider/model, scope,
-  expiry, request ID, idempotency key and separate provider/paid approval.
-- Atomically reserve before provider start and persist the possible-start
-  boundary. Timeout, crash, cancellation ambiguity or network error becomes
-  `UNKNOWN_PROVIDER_OUTCOME`; it never automatically releases budget.
-- Check emergency stop before grant, reservation, provider start, retry and
-  result release. A missing or non-explicit false stop blocks. On stop, request
-  cancellation where supported and reconcile uncertainty manually.
-- Use append-only sanitized audit events, access controls and a retention policy;
-  obtain independent security review before live use.
+- Emergency stop remains checked before any future local handoff; missing or
+  non-explicit false state blocks.
+- `LIMIT_REACHED_5H`, `LIMIT_REACHED_WEEKLY`, `QUOTA_UNKNOWN`, `PAUSED` and
+  `MANUAL_REVIEW_REQUIRED` prohibit new model work.
+- `WAITING_FOR_RESET` is not a timer-triggered resume. After a displayed reset
+  time, a human takes a new quota reading and separately authorizes the task.
+- Any prompt to buy credits, use an API key, reset, upgrade, switch account or
+  use a paid fallback is a policy violation, not a recovery action.
+- Preserve only a local synthetic checkpoint and sanitized audit result. No
+  account screen or quota payload is copied to the public repository.
 
-The API documents active-turn cancellation and session deletion, but an idle or
-completed turn alone is not a safe application outcome. [Session handling](https://developers.openai.com/api/docs/guides/agents-api/sessions)
+## Privacy
 
-## Privacy decision
+The selected first task is synthetic. No personal data, property data, private
+code or operational information can enter a subscription client. This avoids
+making unverified data-residency, retention or enterprise-policy claims for a
+personal subscription surface. Before any non-synthetic use, privacy, retention,
+data-residency and provider terms need an independent review; until then, KAYA
+content is excluded.
 
-Only the fixed synthetic JSON artifact may cross the future provider boundary.
-No personal, property, private-code, source-control, credential or operational
-data is allowed. This is mandatory because the Agents API overview states that
-Agents API supports US-only data residency and not Zero Data Retention. General
-platform data controls do not override that Agents API limitation.
-[Agents overview](https://developers.openai.com/api/docs/guides/agents-api/overview), [data controls](https://developers.openai.com/api/docs/guides/your-data)
-
-| Threat | Control |
-| --- | --- |
-| Task scope changed | Immutable digest plus exact schema/allowlists. |
-| Credential leakage | Server-only secret boundary and redacted audit. |
-| Replay or duplicate charge | One-use request/idempotency and durable accounting. |
-| Delayed outcome/cost | Unknown state holds budget until reconciliation. |
-| Tool or repository access | No environment/tools/MCP/vault/files. |
-| Unsafe publication | Local review and separate human release authority. |
+The future generic Claude policy uses the same default: it is `QUOTA_UNKNOWN`
+until official subscription access, quota visibility, privacy terms and explicit
+manual controls are verified. No Claude integration is introduced here.

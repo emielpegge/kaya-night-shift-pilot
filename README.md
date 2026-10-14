@@ -25,6 +25,7 @@ The [v0.5 Codex-first design](docs/CODEX_FIRST_EXECUTION_ARCHITECTURE_V0_5.md)
 adds only inert private-boundary, grant and accounting design contracts; every
 live request remains denied.
 
-The [v0.6 feasibility record](docs/CODEX_V0_6_GO_NO_GO.md) adds official-source
-research, offline cost estimates, a synthetic proof proposal and explicit
-NO-GO gates. It does not add a provider connection or change the live denial.
+The [v0.6 feasibility record](docs/CODEX_V0_6_GO_NO_GO.md) is now
+subscription-only: it records a manual, quota-gated design and explicit NO-GO
+for unmanaged execution. It does not add a provider connection or change the
+live denial.

@@ -1,8 +1,9 @@
-"""Pure offline cost estimates for the v0.6 synthetic feasibility study.
+"""Pure offline API-price comparison for the v0.6 non-selected alternative.
 
 This module neither imports an OpenAI SDK nor makes a request.  Its figures are
 explicit estimates from a versioned public price input, not billing evidence or
-an execution authorization.
+an execution authorization.  Subscription-only policy must not use it to infer
+included capacity or operational cost.
 """
 from __future__ import annotations
 
