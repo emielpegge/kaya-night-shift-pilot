@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from night_shift_pilot.router import EngineProfile, FeedbackRecord, TaskSpec, route, synthetic_profiles
 
@@ -78,7 +79,71 @@ class IntelligentEngineRouterTests(unittest.TestCase):
     def test_invalid_task_returns_no_execution_without_candidates(self):
         decision = route(task(complexity=99), synthetic_profiles())
         self.assertEqual(decision.status, "NO_EXECUTION")
-        self.assertEqual(decision.rationale, "TASK_POLICY_INVALID")
+        self.assertEqual(decision.rationale, "TASK_POLICY_INVALID:TASK_COMPLEXITY_INVALID")
+        self.assertEqual(decision.candidates, ())
+
+    def test_every_invalid_task_field_fails_closed_without_exception(self):
+        invalid_tasks = (
+            task(task_id=""), task(kind="invalid"), task(complexity=0), task(complexity=True),
+            task(risk="invalid"), task(required_capabilities=frozenset({""})),
+            task(required_capabilities={"code"}), task(required_quality="invalid"),
+            task(max_synthetic_budget_usd=-1), task(max_synthetic_budget_usd="0"),
+            task(paid_call_approved="false"),
+        )
+        for invalid in invalid_tasks:
+            with self.subTest(invalid=invalid):
+                decision = route(invalid, synthetic_profiles())
+                self.assertEqual(decision.status, "NO_EXECUTION")
+                self.assertTrue(decision.rationale.startswith("TASK_POLICY_INVALID:"), decision.rationale)
+                self.assertEqual(decision.candidates, ())
+
+    def test_invalid_profiles_are_audited_and_cannot_win_selection(self):
+        good = synthetic_profiles()[0]
+        invalid_profiles = (
+            replace(good, engine_id="negative-cost", synthetic_cost_usd=-1),
+            replace(good, engine_id="invalid-billing", billing_kind="invalid"),
+            replace(good, engine_id="negative-capacity", capacity_remaining=-1),
+            replace(good, engine_id="bad-complexity", max_complexity=0),
+            replace(good, engine_id="bad-risk", max_risk="invalid"),
+            replace(good, engine_id="bad-quality", quality="invalid"),
+            replace(good, engine_id="bad-kind", supported_kinds=frozenset({"invalid"})),
+            replace(good, engine_id="bad-provider", provider=""),
+            replace(good, engine_id="bad-capabilities", capabilities=frozenset({""})),
+            replace(good, engine_id="bad-latency", latency_rank=0),
+            replace(good, engine_id="unknown-with-cost", billing_kind="unknown", synthetic_cost_usd=0),
+        )
+        decision = route(task(), (good, *invalid_profiles))
+        self.assertEqual(decision.selected_engine_id, "codex-mock")
+        reasons = {candidate.engine_id: candidate.reasons for candidate in decision.candidates}
+        self.assertIn("SYNTHETIC_COST_INVALID", reasons["negative-cost"])
+        self.assertIn("BILLING_KIND_INVALID", reasons["invalid-billing"])
+        self.assertIn("CAPACITY_INVALID", reasons["negative-capacity"])
+        self.assertIn("ENGINE_COMPLEXITY_INVALID", reasons["bad-complexity"])
+        self.assertIn("ENGINE_RISK_INVALID", reasons["bad-risk"])
+        self.assertIn("ENGINE_QUALITY_INVALID", reasons["bad-quality"])
+        self.assertIn("SUPPORTED_TASK_KINDS_INVALID", reasons["bad-kind"])
+        self.assertIn("PROVIDER_INVALID", reasons["bad-provider"])
+        self.assertIn("ENGINE_CAPABILITIES_INVALID", reasons["bad-capabilities"])
+        self.assertIn("LATENCY_RANK_INVALID", reasons["bad-latency"])
+        self.assertIn("UNKNOWN_BILLING_COST_INVALID", reasons["unknown-with-cost"])
+
+    def test_duplicate_engine_ids_block_selection_and_fallback(self):
+        first = synthetic_profiles()[0]
+        second = replace(first, latency_rank=1)
+        decision = route(task(), (first, second))
+        self.assertEqual(decision.status, "NO_EXECUTION")
+        self.assertEqual(decision.fallback_engine_ids, ())
+        self.assertEqual(len(decision.candidates), 2)
+        self.assertTrue(all("DUPLICATE_ENGINE_ID" in candidate.reasons for candidate in decision.candidates))
+
+    def test_routing_and_audit_order_are_deterministic(self):
+        profiles = synthetic_profiles()
+        self.assertEqual(route(task(), profiles), route(task(), tuple(reversed(profiles))))
+
+    def test_invalid_feedback_fails_closed_without_profile_evaluation(self):
+        decision = route(task(), synthetic_profiles(), [FeedbackRecord("codex-mock", 0, 5)])
+        self.assertEqual(decision.status, "NO_EXECUTION")
+        self.assertEqual(decision.rationale, "FEEDBACK_POLICY_INVALID:FEEDBACK_RECORD_INVALID")
         self.assertEqual(decision.candidates, ())
 
 

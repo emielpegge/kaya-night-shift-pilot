@@ -49,3 +49,9 @@ Profiles are fixtures, not a real-engine benchmark.
 Quality/reliability feedback is conservative: it can lower eligibility but cannot
 create capabilities or capacity. The router only returns a decision. Existing
 `NIGHT_SHIFT_STOP` enforcement and all workflow boundaries remain unchanged.
+
+Invalid task, feedback, billing, cost, capacity, complexity, risk, quality, task
+kind, or profile fields fail closed with a traceable policy or candidate reason.
+Duplicate engine IDs are ambiguous and block every matching profile; neither
+selection nor fallback is allowed for them. Candidate records are sorted by ID,
+so equivalent profile sets yield the same audit result regardless of input order.
