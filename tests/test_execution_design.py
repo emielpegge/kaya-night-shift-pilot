@@ -51,6 +51,7 @@ class ExecutionDesignTests(unittest.TestCase):
             (grant(maximum_cost=11), "TASK_BUDGET_EXCEEDED"),
             (grant(maximum_duration_seconds=61), "EXECUTION_TIMEOUT_INVALID"),
             (grant(provider_approved=1), "EXECUTION_GRANT_INVALID"),
+            (grant(paid_approved=1), "EXECUTION_GRANT_INVALID"),
             (grant(issued_at_epoch=16), "EXECUTION_GRANT_NOT_YET_VALID"),
             (grant(policy_version="other"), "POLICY_VERSION_MISMATCH"),
         )
