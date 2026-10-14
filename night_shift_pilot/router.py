@@ -103,19 +103,24 @@ def valid_string_set(value: object) -> bool:
     return isinstance(value, frozenset) and all(isinstance(item, str) and item for item in value)
 
 
+def valid_choice(value: object, allowed: frozenset[str] | dict[str, int]) -> bool:
+    """Membership is safe only after rejecting non-string/unhashable values."""
+    return isinstance(value, str) and value in allowed
+
+
 def validate_task(task: object) -> tuple[str, ...]:
     reasons: list[str] = []
     if not isinstance(getattr(task, "task_id", None), str) or not getattr(task, "task_id", ""):
         reasons.append("TASK_ID_INVALID")
-    if getattr(task, "kind", None) not in TASK_KINDS:
+    if not valid_choice(getattr(task, "kind", None), TASK_KINDS):
         reasons.append("TASK_KIND_INVALID")
     if not is_non_boolean_int(getattr(task, "complexity", None)) or getattr(task, "complexity", 0) not in {1, 2, 3}:
         reasons.append("TASK_COMPLEXITY_INVALID")
-    if getattr(task, "risk", None) not in RISK_RANK:
+    if not valid_choice(getattr(task, "risk", None), RISK_RANK):
         reasons.append("TASK_RISK_INVALID")
     if not valid_string_set(getattr(task, "required_capabilities", None)):
         reasons.append("TASK_CAPABILITIES_INVALID")
-    if getattr(task, "required_quality", None) not in QUALITY_RANK:
+    if not valid_choice(getattr(task, "required_quality", None), QUALITY_RANK):
         reasons.append("TASK_QUALITY_INVALID")
     budget = getattr(task, "max_synthetic_budget_usd", None)
     if not is_non_boolean_int(budget) or budget < 0:
@@ -143,16 +148,16 @@ def validate_engine(engine: object) -> tuple[str, ...]:
     maximum = getattr(engine, "max_complexity", None)
     if not is_non_boolean_int(maximum) or maximum not in {1, 2, 3}:
         reasons.append("ENGINE_COMPLEXITY_INVALID")
-    if getattr(engine, "max_risk", None) not in RISK_RANK:
+    if not valid_choice(getattr(engine, "max_risk", None), RISK_RANK):
         reasons.append("ENGINE_RISK_INVALID")
-    if getattr(engine, "quality", None) not in QUALITY_RANK:
+    if not valid_choice(getattr(engine, "quality", None), QUALITY_RANK):
         reasons.append("ENGINE_QUALITY_INVALID")
     latency = getattr(engine, "latency_rank", None)
     if not is_non_boolean_int(latency) or latency < 1:
         reasons.append("LATENCY_RANK_INVALID")
     billing = getattr(engine, "billing_kind", None)
     cost = getattr(engine, "synthetic_cost_usd", None)
-    if billing not in BILLING_KINDS:
+    if not valid_choice(billing, BILLING_KINDS):
         reasons.append("BILLING_KIND_INVALID")
     elif billing == "unknown":
         if cost is not None:
@@ -173,7 +178,8 @@ def validate_feedback(records: Iterable[object]) -> tuple[str, ...]:
         if (not isinstance(getattr(record, "engine_id", None), str) or
                 not is_non_boolean_int(getattr(record, "quality_score", None)) or
                 not is_non_boolean_int(getattr(record, "reliability_score", None)) or
-                not 1 <= record.quality_score <= 5 or not 1 <= record.reliability_score <= 5):
+                not 1 <= getattr(record, "quality_score", 0) <= 5 or
+                not 1 <= getattr(record, "reliability_score", 0) <= 5):
             reasons.append("FEEDBACK_RECORD_INVALID")
             break
     return tuple(reasons)
@@ -220,7 +226,17 @@ def refusal_reasons(task: TaskSpec, engine: EngineProfile, feedback: Iterable[Fe
 
 def audit_engine_id(engine: object, index: int) -> str:
     engine_id = getattr(engine, "engine_id", None)
-    return engine_id if isinstance(engine_id, str) and engine_id else f"invalid-engine-{index}"
+    return engine_id if isinstance(engine_id, str) and engine_id else "invalid-engine-id"
+
+
+def audit_cost(engine: object) -> int | None:
+    cost = getattr(engine, "synthetic_cost_usd", None)
+    return cost if is_non_boolean_int(cost) and cost >= 0 else None
+
+
+def audit_capacity(engine: object) -> int:
+    capacity = getattr(engine, "capacity_remaining", None)
+    return capacity if is_non_boolean_int(capacity) and capacity >= 0 else -1
 
 
 def route(task: TaskSpec, engines: Iterable[EngineProfile], feedback: Iterable[FeedbackRecord] = ()) -> RoutingDecision:
@@ -243,15 +259,15 @@ def route(task: TaskSpec, engines: Iterable[EngineProfile], feedback: Iterable[F
         if not reasons:
             reasons.extend(refusal_reasons(task, engine, feedback))
         evaluated.append((engine_id, engine, tuple(reasons)))
-    evaluated.sort(key=lambda item: item[0])
+    evaluated.sort(key=lambda item: (item[0], item[2]))
     eligible = sorted((engine for _, engine, reasons in evaluated if not reasons),
         key=lambda engine: (engine.synthetic_cost_usd, engine.latency_rank, engine.engine_id))
     selected = eligible[0] if eligible else None
     candidates = tuple(CandidateDecision(
         engine_id,
-        "SELECTED" if selected and engine.engine_id == selected.engine_id else "SKIPPED",
-        ("LOWEST_ELIGIBLE_SYNTHETIC_COST",) if selected and engine.engine_id == selected.engine_id else reasons or ("HIGHER_COST_OR_LATENCY",),
-        getattr(engine, "synthetic_cost_usd", None), getattr(engine, "capacity_remaining", -1),
+        "SELECTED" if selected and engine_id == selected.engine_id else "SKIPPED",
+        ("LOWEST_ELIGIBLE_SYNTHETIC_COST",) if selected and engine_id == selected.engine_id else reasons or ("HIGHER_COST_OR_LATENCY",),
+        audit_cost(engine), audit_capacity(engine),
     ) for engine_id, engine, reasons in evaluated)
     if selected is None:
         return RoutingDecision("NO_EXECUTION", None, candidates, (), "NO_SAFE_AFFORDABLE_MOCK_ENGINE")

@@ -146,6 +146,60 @@ class IntelligentEngineRouterTests(unittest.TestCase):
         self.assertEqual(decision.rationale, "FEEDBACK_POLICY_INVALID:FEEDBACK_RECORD_INVALID")
         self.assertEqual(decision.candidates, ())
 
+    def test_missing_engine_id_is_skipped_beside_a_valid_selectable_profile(self):
+        good = synthetic_profiles()[0]
+        missing_id = replace(good, engine_id=None)
+        decision = route(task(), (good, missing_id))
+        self.assertEqual(decision.selected_engine_id, "codex-mock")
+        invalid = next(candidate for candidate in decision.candidates if candidate.engine_id == "invalid-engine-id")
+        self.assertEqual(invalid.outcome, "SKIPPED")
+        self.assertIn("ENGINE_ID_INVALID", invalid.reasons)
+        self.assertEqual(invalid.synthetic_cost_usd, 0)
+
+    def test_unhashable_task_and_profile_values_block_without_exception(self):
+        for invalid in (
+            task(kind=[]), task(kind={}), task(risk=[]), task(risk={}),
+            task(required_quality=[]), task(required_quality={}),
+        ):
+            with self.subTest(task=invalid):
+                decision = route(invalid, synthetic_profiles())
+                self.assertEqual(decision.status, "NO_EXECUTION")
+                self.assertTrue(decision.rationale.startswith("TASK_POLICY_INVALID:"))
+        good = synthetic_profiles()[0]
+        malformed = (
+            replace(good, engine_id="list-risk", max_risk=[]),
+            replace(good, engine_id="dict-risk", max_risk={}),
+            replace(good, engine_id="list-quality", quality=[]),
+            replace(good, engine_id="dict-quality", quality={}),
+            replace(good, engine_id="list-billing", billing_kind=[]),
+            replace(good, engine_id="dict-billing", billing_kind={}),
+        )
+        decision = route(task(), (good, *malformed))
+        self.assertEqual(decision.selected_engine_id, "codex-mock")
+        reasons = {candidate.engine_id: candidate.reasons for candidate in decision.candidates}
+        self.assertIn("ENGINE_RISK_INVALID", reasons["list-risk"])
+        self.assertIn("ENGINE_RISK_INVALID", reasons["dict-risk"])
+        self.assertIn("ENGINE_QUALITY_INVALID", reasons["list-quality"])
+        self.assertIn("ENGINE_QUALITY_INVALID", reasons["dict-quality"])
+        self.assertIn("BILLING_KIND_INVALID", reasons["list-billing"])
+        self.assertIn("BILLING_KIND_INVALID", reasons["dict-billing"])
+
+    def test_malformed_feedback_and_engine_objects_fail_closed_deterministically(self):
+        good = synthetic_profiles()[0]
+        malformed_feedback = (object(), {"engine_id": "codex-mock", "quality_score": 5})
+        decision = route(task(), (good,), malformed_feedback)
+        self.assertEqual(decision.status, "NO_EXECUTION")
+        self.assertEqual(decision.rationale, "FEEDBACK_POLICY_INVALID:FEEDBACK_RECORD_INVALID")
+        malformed_engine = object()
+        forward = route(task(), (good, malformed_engine))
+        reverse = route(task(), (malformed_engine, good))
+        self.assertEqual(forward, reverse)
+        self.assertEqual(forward.selected_engine_id, "codex-mock")
+        invalid = next(candidate for candidate in forward.candidates if candidate.engine_id == "invalid-engine-id")
+        self.assertIn("ENGINE_ID_INVALID", invalid.reasons)
+        self.assertEqual(invalid.synthetic_cost_usd, None)
+        self.assertEqual(invalid.capacity_remaining, -1)
+
 
 if __name__ == "__main__":
     unittest.main()
