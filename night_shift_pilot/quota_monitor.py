@@ -16,6 +16,7 @@ MAXIMUM_EVIDENCE_AGE_SECONDS = 300
 RECHECK_DELAY_SECONDS = 5
 MAX_RECHECK_ATTEMPTS = 5
 MAX_RECHECK_BACKOFF_SECONDS = 900
+REQUIRED_CODEX_LOGICAL_LIMITS = frozenset({"five_hour", "weekly"})
 READ_ONLY_APP_SERVER_METHODS = frozenset({"account/read", "account/rateLimits/read"})
 READ_ONLY_APP_SERVER_NOTIFICATIONS = frozenset({"account/rateLimits/updated"})
 FORBIDDEN_APP_SERVER_METHODS = frozenset({
@@ -145,6 +146,7 @@ def _contract_valid(contract: object) -> bool:
             not isinstance(contract.required_buckets, tuple) or not contract.required_buckets):
         return False
     ids: set[str] = set()
+    logical_limits: set[str] = set()
     for item in contract.required_buckets:
         if (not isinstance(item, BucketRequirement) or not _text(item.limit_id) or
                 item.logical_limit not in {"five_hour", "weekly"} or
@@ -153,7 +155,45 @@ def _contract_valid(contract: object) -> bool:
                 not all(_text(value) for value in item.known_reached_types) or item.limit_id in ids):
             return False
         ids.add(item.limit_id)
-    return True
+        logical_limits.add(item.logical_limit)
+    # Official subscription information says five-hour and weekly limits may
+    # both apply. Until a plan-specific exception is independently verified,
+    # v0.7 needs explicit coverage of both before it can report AVAILABLE.
+    return logical_limits == REQUIRED_CODEX_LOGICAL_LIMITS
+
+
+def _recheck_decision_valid(decision: object, now_epoch: int) -> bool:
+    """Accept only a trusted, internally consistent reached-limit decision."""
+    if (not isinstance(decision, QuotaDecision) or not decision.source_trusted or
+            decision.capacity_available or decision.task_start_authorized or
+            decision.code != "LIMIT_REACHED" or
+            not isinstance(decision.blocking_limits, frozenset) or
+            not decision.blocking_limits or
+            not decision.blocking_limits.issubset(REQUIRED_CODEX_LOGICAL_LIMITS) or
+            not isinstance(decision.relevant_resets_at, tuple) or
+            not decision.relevant_resets_at):
+        return False
+    if (not all(_epoch(value) and value > now_epoch for value in decision.relevant_resets_at) or
+            decision.relevant_resets_at != tuple(sorted(set(decision.relevant_resets_at)))):
+        return False
+    if decision.state == "LIMIT_REACHED_5H":
+        return decision.blocking_limits == frozenset({"five_hour"})
+    if decision.state == "LIMIT_REACHED_WEEKLY":
+        return "weekly" in decision.blocking_limits
+    return False
+
+
+def _recheck_plan_valid(plan: object) -> bool:
+    if (not isinstance(plan, RecheckPlan) or not _text(plan.checkpoint_id) or
+            not _epoch(plan.attempt) or plan.attempt > MAX_RECHECK_ATTEMPTS or
+            not _positive_int(plan.scheduled_at_epoch) or
+            plan.status not in {"READ_ONLY_RECHECK_PLANNED", "READ_ONLY_RECHECK_BACKOFF"} or
+            not isinstance(plan.idempotency_key, str)):
+        return False
+    expected = sha256(
+        f"{plan.checkpoint_id}:{plan.scheduled_at_epoch}:{plan.attempt}".encode()
+    ).hexdigest()
+    return plan.idempotency_key == expected
 
 
 def app_server_operation_allowed(operation: object, *, notification: object = False) -> bool:
@@ -220,23 +260,26 @@ def normalize_codex_quota(evidence: object, contract: object, now_epoch: object)
 def plan_recheck(decision: object, checkpoint_id: object, now_epoch: object,
                  prior_plan: object = None) -> RecheckPlan | None:
     """Return one idempotent, conceptual read-only check; no timer is started."""
-    if (not isinstance(decision, QuotaDecision) or not _text(checkpoint_id) or not _epoch(now_epoch) or
-            decision.state not in {"LIMIT_REACHED_5H", "LIMIT_REACHED_WEEKLY"} or
-            not decision.relevant_resets_at):
+    if (not _text(checkpoint_id) or not _epoch(now_epoch) or
+            not _recheck_decision_valid(decision, now_epoch)):
         return None
-    future_resets = tuple(value for value in decision.relevant_resets_at if _epoch(value) and value > now_epoch)
-    if not future_resets:
+    if prior_plan is not None:
+        if not _recheck_plan_valid(prior_plan):
+            return None
+        if prior_plan.checkpoint_id == checkpoint_id:
+            return None
+    future_resets = decision.relevant_resets_at
+    if not future_resets:  # Defensive: _recheck_decision_valid already checks this.
         return None
     target = min(future_resets) + RECHECK_DELAY_SECONDS
     key = sha256(f"{checkpoint_id}:{target}:0".encode()).hexdigest()
-    if isinstance(prior_plan, RecheckPlan) and prior_plan.checkpoint_id == checkpoint_id and prior_plan.idempotency_key == key:
-        return None
     return RecheckPlan(checkpoint_id, 0, target, key, "READ_ONLY_RECHECK_PLANNED")
 
 
 def backoff_recheck(plan: object, now_epoch: object) -> RecheckPlan | None:
     """Bound failed read-only rechecks; exhausted attempts require manual review."""
-    if not isinstance(plan, RecheckPlan) or not _epoch(now_epoch) or plan.attempt < 0 or plan.attempt >= MAX_RECHECK_ATTEMPTS:
+    if (not _epoch(now_epoch) or not _recheck_plan_valid(plan) or
+            now_epoch < plan.scheduled_at_epoch or plan.attempt >= MAX_RECHECK_ATTEMPTS):
         return None
     attempt = plan.attempt + 1
     delay = min(60 * (2 ** (attempt - 1)), MAX_RECHECK_BACKOFF_SECONDS)

@@ -4,9 +4,13 @@
 
 When a normalized decision contains a reached limit and future provider reset
 timestamps, `plan_recheck()` produces one conceptual read-only check at the
-earliest relevant reset plus five seconds. It uses a deterministic SHA-256
-idempotency key derived from checkpoint, target time and attempt. It starts no
-timer, scheduler, background job, provider process, request or task.
+earliest relevant reset plus five seconds. It accepts only a source-trusted,
+internally consistent `LIMIT_REACHED` decision: status, blocking logical limits,
+canonical future reset timestamps, and no capacity/authorization claim must all
+agree. A malformed prior plan, altered idempotency digest, unknown plan status,
+or untrusted notification-derived decision is rejected. It uses a deterministic
+SHA-256 idempotency key derived from checkpoint, target time and attempt. It
+starts no timer, scheduler, background job, provider process, request or task.
 
 If multiple limits are reached, the earliest reset can be meaningfully checked,
 but a remaining weekly limit continues to block. If a read fails in a future

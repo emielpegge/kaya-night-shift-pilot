@@ -5,7 +5,7 @@ from dataclasses import replace
 
 from night_shift_pilot.quota_monitor import (
     QUOTA_CONTRACT_VERSION, AppServerQuotaEvidence, BucketRequirement, ProviderQuotaContract,
-    QuotaBucket, QuotaWindow, TaskCheckpoint, app_server_operation_allowed, assess_resume_candidate,
+    QuotaBucket, QuotaDecision, QuotaWindow, TaskCheckpoint, app_server_operation_allowed, assess_resume_candidate,
     backoff_recheck, checkpoint_for_quota, normalize_codex_quota, plan_recheck,
 )
 
@@ -54,6 +54,16 @@ class QuotaMonitorTests(unittest.TestCase):
         self.assertEqual((decision.state, decision.code), ("AVAILABLE", "CAPACITY_CONFIRMED"))
         self.assertTrue(decision.capacity_available)
         self.assertFalse(decision.task_start_authorized)
+
+    def test_available_requires_explicit_coverage_of_five_hour_and_weekly_windows(self):
+        five_only = requirements(required_buckets=(
+            BucketRequirement("codex_5h", "five_hour", False, frozenset({"five_hour"})),
+        ))
+        weekly_only = requirements(required_buckets=(
+            BucketRequirement("codex_week", "weekly", True, frozenset({"weekly"})),
+        ))
+        self.assertEqual(normalize_codex_quota(evidence(), five_only, NOW + 1).state, "QUOTA_UNKNOWN")
+        self.assertEqual(normalize_codex_quota(evidence(), weekly_only, NOW + 1).state, "QUOTA_UNKNOWN")
 
     def test_five_hour_weekly_and_both_limit_conditions_are_all_preserved(self):
         five = QuotaBucket("codex_5h", window(percent=100), None, None)
@@ -112,6 +122,28 @@ class QuotaMonitorTests(unittest.TestCase):
         exhausted = replace(retry, attempt=5)
         self.assertIsNone(backoff_recheck(exhausted, 10_265))
         self.assertIsNone(plan_recheck(decision, "checkpoint-1", 10_300))
+
+    def test_recheck_requires_trusted_consistent_decision_and_integral_plan(self):
+        reached = QuotaDecision("LIMIT_REACHED_5H", "LIMIT_REACHED", frozenset({"five_hour"}),
+                                (10_200,), True, False)
+        plan = plan_recheck(reached, "checkpoint-1", NOW + 1)
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        for malformed in (
+            replace(reached, source_trusted=False),
+            replace(reached, code="UNTRUSTED_NOTIFICATION"),
+            replace(reached, blocking_limits=frozenset({"weekly"})),
+            replace(reached, relevant_resets_at=(10_200, 10_200)),
+            replace(reached, relevant_resets_at=(NOW,)),
+            replace(reached, capacity_available=True),
+        ):
+            with self.subTest(malformed=malformed):
+                self.assertIsNone(plan_recheck(malformed, "checkpoint-1", NOW + 1))
+        self.assertIsNone(plan_recheck(reached, "checkpoint-1", NOW + 1,
+                                       replace(plan, idempotency_key="not-a-digest")))
+        self.assertIsNone(backoff_recheck(replace(plan, idempotency_key="not-a-digest"), plan.scheduled_at_epoch))
+        self.assertIsNone(backoff_recheck(replace(plan, status="UNKNOWN"), plan.scheduled_at_epoch))
+        self.assertIsNone(backoff_recheck(plan, plan.scheduled_at_epoch - 1))
 
     def test_multiple_limits_recheck_one_then_remaining_limit_stays_blocked(self):
         five = QuotaBucket("codex_5h", window(percent=100, reset=10_100), None, None)

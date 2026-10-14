@@ -56,7 +56,13 @@ never leads to a consume operation.
 `ProviderQuotaContract` holds an approved provider ID, expected `chatgpt`
 authentication mode, exact observed limit IDs, each bucket’s logical purpose,
 whether a secondary window is required, and documented reached-type values.
-It intentionally has no hardcoded five-hour or weekly duration.
+It intentionally has no hardcoded five-hour or weekly duration. Official
+subscription information says five-hour and weekly limits may both apply.
+Accordingly, this offline contract may return `AVAILABLE` only when its
+versioned, source-verified configuration explicitly maps both applicable
+logical categories (`five_hour` and `weekly`) to provider limit IDs. A partial
+or unverified mapping returns `QUOTA_UNKNOWN`; a future plan-specific exception
+requires separate official verification and a new contract version.
 
 `normalize_codex_quota()` separates:
 
