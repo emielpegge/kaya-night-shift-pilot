@@ -35,8 +35,9 @@ attempt separately.
 
 ## Acceptance criteria
 
-- With the stop variable true, absent, empty, or invalid: `controller-prepare` is blocked, the worker does
-  not run, and the controller artifact reports `EMERGENCY_STOP`.
+- With the stop variable true, absent, empty, or invalid: `controller-prepare`
+  ends with `BLOCKED` and code `NIGHT_SHIFT_STOP_NOT_EXPLICITLY_FALSE`; the
+  worker does not run.
 - With the stop variable false and protection visible: controller, worker and
   finalizer complete, and the final artifact reports
   `MOCK_COMPLETED_NO_PUBLICATION`.
