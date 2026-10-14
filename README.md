@@ -5,3 +5,7 @@ fixed synthetic task only. See [the acceptance guide](docs/ACCEPTANCE_GUIDE.md).
 
 The workflow is manual-only, read-only, and cannot publish code or call a model.
 It is deliberately **not** a production automation system.
+
+The [Intelligent Engine Router v0.1](docs/INTELLIGENT_ENGINE_ROUTER_V0_1.md) is
+a separate deterministic synthetic decision component with no workflow or
+provider integration.
