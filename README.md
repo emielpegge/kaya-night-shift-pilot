@@ -34,3 +34,7 @@ The [v0.7 quota-monitor design](docs/QUOTA_MONITOR_GO_NO_GO_V0_7.md) adds only
 offline App Server quota normalization, conceptual recheck planning and
 checkpoint contracts. It remains NO-GO for a live connector and cannot start
 or resume AI work.
+
+The [v0.8 subscription-integration feasibility record](docs/SUBSCRIPTION_INTEGRATION_GO_NO_GO_V0_8.md)
+compares current official local and hosted routes, documents the zero-additional-
+cost boundary, and remains NO-GO for live Night Shift subscription integration.
