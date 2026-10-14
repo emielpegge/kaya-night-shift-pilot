@@ -53,3 +53,7 @@ The v0.11 offline demo can be run in an empty local runtime directory with
 It requires that exact active stop value and records only a synthetic result.
 Its approval is explicitly simulated, not a human decision; use `review` to
 record a local human approval or rejection.
+
+For a supervised, copy-only task handoff use `task create`, `task handoff`,
+`task report`, and `task review` through the same CLI. It stores only local
+metadata and cannot start Codex.
