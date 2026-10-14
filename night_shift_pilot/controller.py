@@ -14,7 +14,8 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from .contracts import APPROVED_TASK, BoundaryError, SCHEMA_VERSION, approved_spec, digest
+from .contracts import APPROVED_TASK, BoundaryError, SCHEMA_VERSION, approved_spec, digest, verify_approved_spec
+from .router_adapter import routing_handoff, verify_routing_handoff
 
 
 def utc_now() -> str:
@@ -68,6 +69,7 @@ def verify_environment(environment: dict[str, str], branch_check=public_branch_p
 def prepare(environment: dict[str, str], branch_check=public_branch_protected) -> dict:
     verify_environment(environment, branch_check)
     spec = approved_spec(environment.get("GITHUB_RUN_ID", ""))
+    router = routing_handoff(spec)
     return {
         "schema_version": SCHEMA_VERSION,
         "phase": "PREPARED",
@@ -75,19 +77,58 @@ def prepare(environment: dict[str, str], branch_check=public_branch_protected) -
         "at": utc_now(),
         "spec": spec,
         "spec_sha256": spec["spec_sha256"],
-        "report_sha256": digest({"phase": "PREPARED", "spec_sha256": spec["spec_sha256"]}),
+        "router": router,
+        "report_sha256": digest({
+            "phase": "PREPARED", "spec_sha256": spec["spec_sha256"],
+            "router_decision_sha256": router["router_decision_sha256"],
+        }),
     }
+
+
+def verify_prepared(prepared: object) -> dict:
+    """Validate all controller-to-worker bindings before mock processing."""
+    if not isinstance(prepared, dict):
+        raise BoundaryError("PREPARED_HANDOFF_MISSING")
+    if (prepared.get("schema_version") != SCHEMA_VERSION or prepared.get("phase") != "PREPARED" or
+            prepared.get("status") != "READY_FOR_MOCK_WORKER"):
+        raise BoundaryError("PREPARED_HANDOFF_CONTRACT_INVALID")
+    spec = verify_approved_spec(prepared.get("spec"))
+    if prepared.get("spec_sha256") != spec["spec_sha256"]:
+        raise BoundaryError("PREPARED_SPEC_MISMATCH")
+    router = verify_routing_handoff(spec, prepared.get("router"))
+    expected_report_digest = digest({
+        "phase": "PREPARED", "spec_sha256": spec["spec_sha256"],
+        "router_decision_sha256": router["router_decision_sha256"],
+    })
+    if prepared.get("report_sha256") != expected_report_digest:
+        raise BoundaryError("PREPARED_HANDOFF_INTEGRITY_FAILED")
+    return {"spec": spec, "router": router}
 
 
 def finalize(prepared: dict, result: dict, environment: dict[str, str]) -> dict:
     require_execution_enabled(environment.get("NIGHT_SHIFT_STOP"))
-    spec = prepared.get("spec")
-    canonical_spec = {k: v for k, v in spec.items() if k != "spec_sha256"} if isinstance(spec, dict) else None
-    if not isinstance(spec, dict) or spec.get("spec_sha256") != digest(canonical_spec):
-        raise BoundaryError("SPEC_INTEGRITY_FAILED")
+    verified = verify_prepared(prepared)
+    spec = verified["spec"]
+    router = verified["router"]
+    if not isinstance(result, dict):
+        raise BoundaryError("WORKER_RESULT_INVALID")
+    expected_result_fields = {
+        "schema_version", "mode", "status", "task_id", "run_id", "spec_sha256",
+        "router_decision_sha256", "selected_engine_id", "synthetic_result", "result_sha256",
+    }
+    if set(result) != expected_result_fields:
+        raise BoundaryError("WORKER_RESULT_CONTRACT_INVALID")
     if result.get("spec_sha256") != spec["spec_sha256"]:
         raise BoundaryError("WORKER_RESULT_MISMATCH")
-    if result.get("status") != "MOCK_SUCCEEDED" or result.get("mode") != "MOCK_ONLY":
+    if (result.get("task_id") != spec["task_id"] or result.get("run_id") != spec["run_id"] or
+            result.get("router_decision_sha256") != router["router_decision_sha256"] or
+            result.get("selected_engine_id") != router["router_decision"]["selected_engine_id"]):
+        raise BoundaryError("WORKER_ROUTER_RESULT_MISMATCH")
+    canonical_result = {key: value for key, value in result.items() if key != "result_sha256"} if isinstance(result, dict) else None
+    if not isinstance(result, dict) or result.get("result_sha256") != digest(canonical_result):
+        raise BoundaryError("WORKER_RESULT_INTEGRITY_FAILED")
+    if (result.get("schema_version") != SCHEMA_VERSION or result.get("status") != "MOCK_SUCCEEDED" or result.get("mode") != "MOCK_ONLY" or
+            result.get("synthetic_result") != "controller_worker_router_handoff_verified"):
         raise BoundaryError("WORKER_RESULT_INVALID")
     report = {
         "schema_version": SCHEMA_VERSION,
@@ -97,6 +138,8 @@ def finalize(prepared: dict, result: dict, environment: dict[str, str]) -> dict:
         "task_id": spec["task_id"],
         "run_id": spec["run_id"],
         "spec_sha256": spec["spec_sha256"],
+        "router_decision_sha256": router["router_decision_sha256"],
+        "selected_engine_id": router["router_decision"]["selected_engine_id"],
         "worker_result_sha256": digest(result),
         "guarantees": [
             "synthetic_input_only",

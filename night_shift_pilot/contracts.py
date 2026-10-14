@@ -22,7 +22,7 @@ def digest(value: object) -> str:
 
 def approved_spec(run_id: str) -> dict[str, str]:
     """Return the sole fixed, data-independent mock task."""
-    if not run_id or len(run_id) > 128:
+    if not isinstance(run_id, str) or not run_id or len(run_id) > 128:
         raise BoundaryError("RUN_ID_INVALID")
     spec = {
         "schema_version": SCHEMA_VERSION,
@@ -33,3 +33,13 @@ def approved_spec(run_id: str) -> dict[str, str]:
     }
     spec["spec_sha256"] = digest(spec)
     return spec
+
+
+def verify_approved_spec(spec: object) -> dict[str, str]:
+    """Accept only the complete, exact fixed task reconstructed from its run ID."""
+    if not isinstance(spec, dict):
+        raise BoundaryError("APPROVED_SPEC_MISMATCH")
+    expected = approved_spec(spec.get("run_id"))
+    if spec != expected:
+        raise BoundaryError("APPROVED_SPEC_MISMATCH")
+    return expected

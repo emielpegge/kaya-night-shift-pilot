@@ -7,24 +7,27 @@ import os
 from pathlib import Path
 
 from .contracts import BoundaryError, SCHEMA_VERSION, digest
-from .controller import require_execution_enabled, write_json
+from .controller import require_execution_enabled, verify_prepared, write_json
 
 
 def run(prepared: dict, stop_value: str | None) -> dict:
     require_execution_enabled(stop_value)
-    spec = prepared.get("spec")
-    canonical_spec = {k: v for k, v in spec.items() if k != "spec_sha256"} if isinstance(spec, dict) else None
-    if not isinstance(spec, dict) or spec.get("spec_sha256") != digest(canonical_spec):
-        raise BoundaryError("SPEC_INTEGRITY_FAILED")
-    return {
+    verified = verify_prepared(prepared)
+    spec = verified["spec"]
+    router = verified["router"]
+    result = {
         "schema_version": SCHEMA_VERSION,
         "mode": "MOCK_ONLY",
         "status": "MOCK_SUCCEEDED",
         "task_id": spec["task_id"],
         "run_id": spec["run_id"],
         "spec_sha256": spec["spec_sha256"],
-        "synthetic_result": "controller_worker_handoff_verified",
+        "router_decision_sha256": router["router_decision_sha256"],
+        "selected_engine_id": router["router_decision"]["selected_engine_id"],
+        "synthetic_result": "controller_worker_router_handoff_verified",
     }
+    result["result_sha256"] = digest(result)
+    return result
 
 
 def main() -> int:

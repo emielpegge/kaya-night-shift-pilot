@@ -5,9 +5,13 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
+from unittest.mock import patch
 
-from night_shift_pilot.contracts import APPROVED_TASK, BoundaryError
-from night_shift_pilot.controller import finalize, prepare, verify_environment
+from night_shift_pilot.contracts import APPROVED_TASK, BoundaryError, digest
+from night_shift_pilot.controller import finalize, prepare, verify_environment, verify_prepared
+from night_shift_pilot.router import RoutingDecision, route, synthetic_profiles
+from night_shift_pilot.router_adapter import routing_handoff, task_for_approved_spec
 from night_shift_pilot.worker import run
 
 
@@ -33,6 +37,17 @@ class PilotSafetyTests(unittest.TestCase):
         prepared = prepare(environment(), self.protected)
         self.assertEqual(prepared["status"], "READY_FOR_MOCK_WORKER")
         self.assertEqual(prepared["spec"]["task_id"], APPROVED_TASK)
+        self.assertEqual(prepared["router"]["task_id"], APPROVED_TASK)
+        self.assertEqual(prepared["router"]["router_decision"]["status"], "SELECTED")
+        self.assertTrue(prepared["router"]["router_decision"]["selected_engine_id"].endswith("-mock"))
+
+    def test_router_handoff_is_deterministic_and_audits_fallbacks(self):
+        prepared = prepare(environment(), self.protected)
+        self.assertEqual(prepared["router"], routing_handoff(prepared["spec"]))
+        decision = prepared["router"]["router_decision"]
+        self.assertEqual(decision["selected_engine_id"], "claude-mock")
+        self.assertEqual(decision["fallback_engine_ids"], ["future-provider-mock"])
+        self.assertTrue(any(candidate["outcome"] == "SKIPPED" for candidate in decision["candidates"]))
 
     def test_environment_checks_manual_main_stop_task_and_protection(self):
         cases = [
@@ -74,6 +89,102 @@ class PilotSafetyTests(unittest.TestCase):
         bad_result = run(prepared, "false") | {"spec_sha256": "0" * 64}
         with self.assertRaisesRegex(BoundaryError, "WORKER_RESULT_MISMATCH"):
             finalize(prepared, bad_result, environment())
+
+    def test_tampered_router_decision_or_prepared_handoff_blocks(self):
+        prepared = prepare(environment(), self.protected)
+        changed_router = prepared | {"router": prepared["router"] | {
+            "router_decision": prepared["router"]["router_decision"] | {"selected_engine_id": "codex-mock"},
+        }}
+        with self.assertRaisesRegex(BoundaryError, "ROUTER_DECISION_INTEGRITY_FAILED"):
+            run(changed_router, "false")
+        changed_prepared = prepared | {"report_sha256": "0" * 64}
+        with self.assertRaisesRegex(BoundaryError, "PREPARED_HANDOFF_INTEGRITY_FAILED"):
+            verify_prepared(changed_prepared)
+        with self.assertRaisesRegex(BoundaryError, "PREPARED_HANDOFF_CONTRACT_INVALID"):
+            verify_prepared(prepared | {"phase": "FINALIZED"})
+        self_consistent_router = changed_router["router"] | {
+            "router_decision_sha256": digest(changed_router["router"]["router_decision"]),
+        }
+        self_consistent_prepared = prepared | {"router": self_consistent_router}
+        self_consistent_prepared["report_sha256"] = digest({
+            "phase": "PREPARED", "spec_sha256": prepared["spec_sha256"],
+            "router_decision_sha256": self_consistent_router["router_decision_sha256"],
+        })
+        with self.assertRaisesRegex(BoundaryError, "ROUTER_DECISION_MISMATCH"):
+            verify_prepared(self_consistent_prepared)
+
+    def test_prepared_spec_must_exactly_match_reconstructed_approved_task(self):
+        prepared = prepare(environment(), self.protected)
+        changed_input = prepared["spec"] | {"input": "different synthetic text"}
+        with self.assertRaisesRegex(BoundaryError, "APPROVED_SPEC_MISMATCH"):
+            verify_prepared(prepared | {"spec": changed_input})
+        changed_input["spec_sha256"] = digest({key: value for key, value in changed_input.items() if key != "spec_sha256"})
+        recomputed = prepared | {"spec": changed_input, "spec_sha256": changed_input["spec_sha256"]}
+        recomputed["router"] = routing_handoff(changed_input)
+        recomputed["report_sha256"] = digest({
+            "phase": "PREPARED", "spec_sha256": changed_input["spec_sha256"],
+            "router_decision_sha256": recomputed["router"]["router_decision_sha256"],
+        })
+        with self.assertRaisesRegex(BoundaryError, "APPROVED_SPEC_MISMATCH"):
+            verify_prepared(recomputed)
+        extra_field = prepared["spec"] | {"unexpected": "synthetic"}
+        extra_field["spec_sha256"] = digest({key: value for key, value in extra_field.items() if key != "spec_sha256"})
+        with self.assertRaisesRegex(BoundaryError, "APPROVED_SPEC_MISMATCH"):
+            verify_prepared(prepared | {"spec": extra_field, "spec_sha256": extra_field["spec_sha256"]})
+        missing_field = {key: value for key, value in prepared["spec"].items() if key != "input"}
+        with self.assertRaisesRegex(BoundaryError, "APPROVED_SPEC_MISMATCH"):
+            verify_prepared(prepared | {"spec": missing_field})
+        invalid_run_id = prepared["spec"] | {"run_id": ""}
+        with self.assertRaisesRegex(BoundaryError, "RUN_ID_INVALID"):
+            verify_prepared(prepared | {"spec": invalid_run_id})
+        with self.assertRaisesRegex(BoundaryError, "RUN_ID_INVALID"):
+            verify_prepared(prepared | {"spec": {key: value for key, value in prepared["spec"].items() if key != "run_id"}})
+
+    def test_tampered_worker_result_or_task_id_blocks(self):
+        prepared = prepare(environment(), self.protected)
+        result = run(prepared, "false")
+        with self.assertRaisesRegex(BoundaryError, "WORKER_RESULT_INTEGRITY_FAILED"):
+            finalize(prepared, result | {"synthetic_result": "changed"}, environment())
+        self_consistent_result = result | {"synthetic_result": "changed"}
+        self_consistent_result["result_sha256"] = digest(
+            {key: value for key, value in self_consistent_result.items() if key != "result_sha256"})
+        with self.assertRaisesRegex(BoundaryError, "WORKER_RESULT_INVALID"):
+            finalize(prepared, self_consistent_result, environment())
+        extra_result = result | {"unexpected": "synthetic"}
+        extra_result["result_sha256"] = digest(
+            {key: value for key, value in extra_result.items() if key != "result_sha256"})
+        with self.assertRaisesRegex(BoundaryError, "WORKER_RESULT_CONTRACT_INVALID"):
+            finalize(prepared, extra_result, environment())
+        wrong_task = result | {"task_id": "other"}
+        wrong_task["result_sha256"] = digest({key: value for key, value in wrong_task.items() if key != "result_sha256"})
+        with self.assertRaisesRegex(BoundaryError, "WORKER_ROUTER_RESULT_MISMATCH"):
+            finalize(prepared, wrong_task, environment())
+
+    def test_missing_selected_engine_and_router_no_execution_block(self):
+        prepared = prepare(environment(), self.protected)
+        missing_engine = prepared | {"router": prepared["router"] | {
+            "router_decision": prepared["router"]["router_decision"] | {"selected_engine_id": None},
+        }}
+        with self.assertRaisesRegex(BoundaryError, "ROUTER_DECISION_INTEGRITY_FAILED"):
+            run(missing_engine, "false")
+        unsupported = tuple(replace(profile, supported_kinds=frozenset({"backend"})) for profile in synthetic_profiles())
+        with patch("night_shift_pilot.router_adapter.synthetic_profiles", return_value=unsupported):
+            with self.assertRaisesRegex(BoundaryError, "ROUTER_NO_EXECUTION"):
+                prepare(environment(), self.protected)
+
+    def test_non_mock_or_unknown_router_engine_blocks(self):
+        prepared = prepare(environment(), self.protected)
+        valid_decision = route(task_for_approved_spec(prepared["spec"]), synthetic_profiles())
+        non_mock = tuple(replace(profile, mock_only=False) if profile.engine_id == "claude-mock" else profile
+            for profile in synthetic_profiles())
+        with patch("night_shift_pilot.router_adapter.synthetic_profiles", return_value=non_mock), \
+                patch("night_shift_pilot.router_adapter.route", return_value=valid_decision):
+            with self.assertRaisesRegex(BoundaryError, "ROUTER_ENGINE_NOT_MOCK_ONLY"):
+                routing_handoff(prepared["spec"])
+        unknown = replace(valid_decision, selected_engine_id="unknown-mock")
+        with patch("night_shift_pilot.router_adapter.route", return_value=unknown):
+            with self.assertRaisesRegex(BoundaryError, "ROUTER_ENGINE_UNKNOWN"):
+                routing_handoff(prepared["spec"])
 
     def test_successful_flow_is_mock_only_and_has_no_publication(self):
         prepared = prepare(environment(), self.protected)
