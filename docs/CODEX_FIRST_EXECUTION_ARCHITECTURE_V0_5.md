@@ -71,15 +71,23 @@ token issuance or authorization flow is implemented here.
 ## Accounting model
 
 The inert state machine models `RESERVED`, `COMMITTED`,
-`UNKNOWN_PROVIDER_OUTCOME`, and `RELEASED_PRE_START`. A future durable service
-must atomically reserve per-task and nightly budget, request-rate and concurrency
-capacity before provider start. Provider-reported actual use may commit against
-the reservation only after correlation; estimated cost is not final cost.
+`UNKNOWN_PROVIDER_OUTCOME`, and `RELEASED_PRE_START`, plus an explicit provider
+start boundary: `PRE_START_CONFIRMED`, `START_MAY_HAVE_OCCURRED`, or
+`START_CONFIRMED`. A future durable service must atomically record the start
+boundary before any provider-start attempt. Only an untouched,
+`PRE_START_CONFIRMED` reservation can be released. Once start may have occurred,
+release is forbidden even if no result is available.
+
+Nightly blocked budget is cumulative: `COMMITTED` uses its committed amount;
+`RESERVED` and `UNKNOWN_PROVIDER_OUTCOME` retain their full reservation; only
+`RELEASED_PRE_START` releases budget. Therefore a later reservation cannot spend
+past earlier committed work. Provider-reported actual use may commit against the
+reservation only after correlation; estimated cost is not final cost.
 
 On timeout, retry uncertainty, or crash after provider start, mark the
 reservation unknown and retain it: never automatically release an amount whose
-provider cost may still arrive. Only a confirmed crash before start can release
-a reservation. Unknown cost model, price, quota, approval, reservation,
+provider cost may still arrive. Unknown/invalid state records and invalid
+transitions block. Unknown cost model, price, quota, approval, reservation,
 idempotency or accounting state blocks execution.
 
 ## Emergency stop and results

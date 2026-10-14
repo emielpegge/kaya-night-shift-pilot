@@ -4,8 +4,9 @@ import unittest
 from dataclasses import replace
 
 from night_shift_pilot.execution_design import (
-    EXECUTION_DESIGN_VERSION, AccountingState, ExecutionGrant, GrantPolicy,
-    authorize_live_execution, authorize_publication, mark_provider_outcome_unknown, record_crash_before_reservation, release_pre_start_reservation,
+    EXECUTION_DESIGN_VERSION, AccountingState, ExecutionGrant, GrantPolicy, Reservation,
+    authorize_live_execution, authorize_publication, commit_provider_cost, mark_provider_outcome_unknown,
+    mark_provider_start_may_have_occurred, record_crash_before_reservation, release_pre_start_reservation,
     reserve_budget, validate_grant,
 )
 
@@ -49,6 +50,9 @@ class ExecutionDesignTests(unittest.TestCase):
             (grant(cost_model_id=None), "COST_MODEL_UNKNOWN"),
             (grant(maximum_cost=11), "TASK_BUDGET_EXCEEDED"),
             (grant(maximum_duration_seconds=61), "EXECUTION_TIMEOUT_INVALID"),
+            (grant(provider_approved=1), "EXECUTION_GRANT_INVALID"),
+            (grant(issued_at_epoch=16), "EXECUTION_GRANT_NOT_YET_VALID"),
+            (grant(policy_version="other"), "POLICY_VERSION_MISMATCH"),
         )
         for item, code in cases:
             with self.subTest(code=code):
@@ -76,12 +80,24 @@ class ExecutionDesignTests(unittest.TestCase):
         exhausted = reserve_budget(state(maximum_requests=1, maximum_concurrency=2), grant(), policy(), 15).state
         self.assertEqual(reserve_budget(exhausted, second, policy(), 15).code, "RATE_LIMIT_EXCEEDED")
 
+    def test_committed_cost_remains_in_cumulative_night_budget(self):
+        first = reserve_budget(state(nightly_budget=10, maximum_concurrency=2), grant(maximum_cost=6), policy(), 15).state
+        started = mark_provider_start_may_have_occurred(first, "request-1").state
+        committed = commit_provider_cost(started, "request-1", 6).state
+        second = grant(request_id="request-2", idempotency_key="idempotency-2", maximum_cost=5)
+        self.assertEqual(reserve_budget(committed, second, policy(), 15).code, "NIGHTLY_BUDGET_EXCEEDED")
+        allowed = grant(request_id="request-3", idempotency_key="idempotency-3", maximum_cost=4)
+        self.assertEqual(reserve_budget(committed, allowed, policy(), 15).status, "RESERVED_FOR_FUTURE_PRIVATE_EXECUTION")
+
     def test_crash_before_start_can_release_but_unknown_outcome_remains_reserved(self):
         initial = state()
         pre_reservation_crash = record_crash_before_reservation(initial)
         self.assertEqual(pre_reservation_crash.code, "CRASH_BEFORE_RESERVATION_NO_EXECUTION")
         self.assertEqual(pre_reservation_crash.state, initial)
         reserved = reserve_budget(state(), grant(), policy(), 15).state
+        possible_start = mark_provider_start_may_have_occurred(reserved, "request-1")
+        self.assertEqual(release_pre_start_reservation(possible_start.state, "request-1").code, "PRE_START_EVIDENCE_REQUIRED")
+        self.assertEqual(commit_provider_cost(reserved, "request-1", 1).code, "INVALID_COMMIT_TRANSITION")
         released = release_pre_start_reservation(reserved, "request-1")
         self.assertEqual(released.status, "RELEASED")
         self.assertEqual(released.state.reservations[0].state, "RELEASED_PRE_START")
@@ -90,6 +106,12 @@ class ExecutionDesignTests(unittest.TestCase):
         self.assertEqual(unknown.status, "UNKNOWN_PROVIDER_OUTCOME")
         self.assertEqual(unknown.state.reservations[0].state, "UNKNOWN_PROVIDER_OUTCOME")
         self.assertEqual(release_pre_start_reservation(unknown.state, "request-1").status, "DENIED")
+
+    def test_invalid_policy_and_reservation_records_fail_closed(self):
+        self.assertEqual(validate_grant(grant(), policy(maximum_cost_per_task=True), 15).code, "EXECUTION_POLICY_INVALID")
+        invalid = state(reservations=(Reservation("request-1", "idem", -1, "UNKNOWN", "PRE_START_CONFIRMED"),))
+        self.assertEqual(reserve_budget(invalid, grant(), policy(), 15).code, "ACCOUNTING_STATE_INVALID")
+        self.assertEqual(release_pre_start_reservation(invalid, "request-1").code, "ACCOUNTING_STATE_INVALID")
 
     def test_publication_is_never_authorized_by_a_provider_or_grant_result(self):
         self.assertEqual(authorize_publication().code, "PUBLICATION_REQUIRES_SEPARATE_HUMAN_APPROVAL")
