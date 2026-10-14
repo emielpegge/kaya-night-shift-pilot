@@ -57,3 +57,8 @@ record a local human approval or rejection.
 For a supervised, copy-only task handoff use `task create`, `task handoff`,
 `task report`, and `task review` through the same CLI. It stores only local
 metadata and cannot start Codex.
+
+For the same manual-only process with fewer administrative commands, use
+`quick start --task-id ID --branch feature/NAME --scope "Synthetic scope"`,
+then `quick finish ID --summary "Result" --tests "Not run"`, and
+`quick status ID`. Human review remains a separate `task review` command.
