@@ -9,12 +9,13 @@ import argparse
 from dataclasses import asdict
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 from typing import Final
 
 from .local_execution import (
     LOCAL_EXECUTION_VERSION, LocalExecutionStore, LocalExecutionStoreError,
-    PreflightRequest, StoredCheckpoint, StoredSyntheticResult,
+    PreflightRequest, StoredCheckpoint, StoredSyntheticResult, StoredTask,
     SyntheticTaskArtifact, default_local_store_root, offline_demo_preflight,
 )
 
@@ -58,6 +59,15 @@ def demo_artifact() -> SyntheticTaskArtifact:
     )
 
 
+def _approved_demo_task() -> StoredTask:
+    artifact = demo_artifact()
+    artifact_json = asdict(artifact)
+    artifact_digest = sha256(
+        json.dumps(artifact_json, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return StoredTask(artifact, artifact_digest, "PENDING", "APPROVED", ())
+
+
 def _preflight_request(task) -> PreflightRequest:
     return PreflightRequest(
         task=task,
@@ -65,7 +75,7 @@ def _preflight_request(task) -> PreflightRequest:
         feature_branch=DEMO_BRANCH,
         allowed_directories=("docs", "night_shift_pilot", "tests"),
         requested_directories=DEMO_DIRECTORIES,
-        emergency_stop="true",
+        emergency_stop=os.environ.get("NIGHT_SHIFT_STOP"),
         human_authorized=True,
         auth_mode="chatgpt_subscription",
         api_key_mode=False,
@@ -94,8 +104,11 @@ def _checkpoint(task_id: str, attempt_id: str, status: str) -> StoredCheckpoint:
 
 def start_interrupted_demo(store: LocalExecutionStore):
     """Create the approved synthetic task and intentionally leave it incomplete."""
-    task = store.create_task(demo_artifact(), review_status="APPROVED")
-    _require_demo_preflight(task)
+    expected_task = _approved_demo_task()
+    _require_demo_preflight(expected_task)
+    task = store.create_task(expected_task.artifact, review_status="APPROVED")
+    if task != expected_task:
+        raise LocalWorkflowError("SYNTHETIC_DEMO_TASK_MISMATCH")
     running = store.save_checkpoint(_checkpoint(DEMO_TASK_ID, START_ATTEMPT, "RUNNING"))
     paused = store.save_checkpoint(_checkpoint(DEMO_TASK_ID, INTERRUPTED_ATTEMPT, "PAUSED_INCOMPLETE"))
     return paused, {
@@ -142,7 +155,7 @@ def run_demo(store: LocalExecutionStore):
         "task_id": completed.artifact.task_id,
         "task_status": completed.task_status,
         "review_status": reviewed.review_status,
-        "review": "SYNTHETIC_REVIEW_RECORDED",
+        "review": "SIMULATED_APPROVAL_NOT_HUMAN_DECISION",
         "checkpoint_count": len(completed.execution_attempt_ids),
         "result_sha256": result.result_sha256,
         "live_execution": "NOT_IMPLEMENTED",

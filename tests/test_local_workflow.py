@@ -4,9 +4,11 @@ from contextlib import redirect_stdout
 from dataclasses import replace
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from night_shift_pilot.local_execution import (
     LOCAL_EXECUTION_VERSION, LocalExecutionStore, LocalExecutionStoreError,
@@ -22,8 +24,11 @@ class LocalWorkflowTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
+        self.stop_environment = patch.dict(os.environ, {"NIGHT_SHIFT_STOP": "true"})
+        self.stop_environment.start()
 
     def tearDown(self):
+        self.stop_environment.stop()
         self.temporary.cleanup()
 
     def store(self):
@@ -40,7 +45,7 @@ class LocalWorkflowTests(unittest.TestCase):
         self.assertEqual(report["mode"], "OFFLINE_SYNTHETIC_DEMO_ONLY")
         self.assertEqual(report["task_status"], "COMPLETED")
         self.assertEqual(report["checkpoint_count"], 4)
-        self.assertEqual(report["review"], "SYNTHETIC_REVIEW_RECORDED")
+        self.assertEqual(report["review"], "SIMULATED_APPROVAL_NOT_HUMAN_DECISION")
         state = status_payload(self.store())
         self.assertEqual(state["synthetic_result"]["synthetic_result"], "synthetic_local_workflow_completed")
         self.assertEqual(state["task"]["review_status"], "APPROVED")
@@ -103,6 +108,18 @@ class LocalWorkflowTests(unittest.TestCase):
             offline_demo_preflight(replace(request, emergency_stop="false")).code,
             "OFFLINE_DEMO_REQUIRES_ACTIVE_STOP",
         )
+
+    def test_demo_requires_explicit_true_process_stop_without_creating_a_task(self):
+        for value in ("false", "invalid", None):
+            with self.subTest(value=value):
+                if value is None:
+                    environment = patch.dict(os.environ, {}, clear=True)
+                else:
+                    environment = patch.dict(os.environ, {"NIGHT_SHIFT_STOP": value})
+                with environment:
+                    exit_code, report = self.run_cli("demo")
+                self.assertEqual((exit_code, report["code"]), (2, "OFFLINE_DEMO_PREFLIGHT_OFFLINE_DEMO_REQUIRES_ACTIVE_STOP"))
+                self.assertFalse((self.root / "runtime" / "tasks" / f"{DEMO_TASK_ID}.json").exists())
 
     def test_cli_refuses_a_runtime_directory_inside_this_repository(self):
         exit_code, report = self.run_cli("--store", str(PILOT_REPOSITORY_ROOT / "night-shift-local-runtime"), "status")
