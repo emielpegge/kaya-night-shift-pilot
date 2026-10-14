@@ -94,6 +94,32 @@ class LocalExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(LocalExecutionStoreError, "DUPLICATE_EXECUTION_ATTEMPT_ID"):
             self.store.save_checkpoint(duplicate)
 
+    def test_restart_reconciles_crash_after_checkpoint_before_task_update(self):
+        task = self.create_approved_task()
+        original_write = self.store._atomic_write
+
+        def crash_before_task_write(path, value):
+            if path == self.store._task_path(task.artifact.task_id):
+                raise LocalExecutionStoreError("SIMULATED_CRASH")
+            return original_write(path, value)
+
+        self.store._atomic_write = crash_before_task_write
+        with self.assertRaisesRegex(LocalExecutionStoreError, "SIMULATED_CRASH"):
+            self.store.save_checkpoint(checkpoint())
+        self.assertTrue(self.store._checkpoint_path("attempt-1").exists())
+        self.assertTrue(self.store._transaction_path("attempt-1").exists())
+        restarted = LocalExecutionStore(self.root / "runtime", repository_root=self.root / "repository")
+        restored = restarted.load_task(task.artifact.task_id)
+        self.assertEqual(restored.execution_attempt_ids, ("attempt-1",))
+        self.assertEqual(restarted.reconciled_transaction_ids, ("attempt-1",))
+        self.assertFalse(restarted._transaction_path("attempt-1").exists())
+
+    def test_restart_rejects_unjournaled_orphan_checkpoint(self):
+        self.create_approved_task()
+        self.store._atomic_create(self.store._checkpoint_path("attempt-1"), self.store._checkpoint_to_json(checkpoint()))
+        with self.assertRaisesRegex(LocalExecutionStoreError, "ORPHANED_CHECKPOINT"):
+            LocalExecutionStore(self.root / "runtime", repository_root=self.root / "repository")
+
     def test_preflight_allows_only_synthetic_offline_scope(self):
         decision = dry_run_preflight(self.preflight_request(self.create_approved_task()))
         self.assertEqual((decision.status, decision.code), ("ALLOWED", "OFFLINE_PREFLIGHT_ONLY"))

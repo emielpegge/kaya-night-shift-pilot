@@ -12,6 +12,10 @@ and fail closed on missing or corrupt data. Attempt IDs are immutable and unique
 across the local store; an uncertain provider outcome can only be stored as
 `UNKNOWN_PROVIDER_OUTCOME`, never `COMPLETED` or silently cleared.
 
+Checkpoint commits use a short journal: checkpoint and task state are reconciled
+on restart only when the journal, checkpoint, and exact task transition agree.
+An unjournaled or conflicting checkpoint is blocked rather than inferred.
+
 `dry_run_preflight()` accepts only an approved synthetic task on its recorded
 `feature/` branch and repository, with workspace-only sandbox scope, explicit
 human authorization, exact `NIGHT_SHIFT_STOP=false`, no API-key mode, no paid

@@ -16,6 +16,7 @@ from typing import Final
 
 
 LOCAL_EXECUTION_VERSION: Final = "local-execution-foundation-v0.10"
+CHECKPOINT_TRANSACTION_VERSION: Final = "checkpoint-transaction-v0.10"
 SYNTHETIC_TASK_KIND: Final = "synthetic-local-development-task-v1"
 SAFE_LOCAL_DIRECTORIES: Final = frozenset({"docs", "night_shift_pilot", "tests"})
 TASK_STATUSES: Final = frozenset({
@@ -168,12 +169,16 @@ class LocalExecutionStore:
                 raise LocalExecutionStoreError("STORE_ROOT_INSIDE_REPOSITORY")
         self.tasks_root = self.root / "tasks"
         self.checkpoints_root = self.root / "checkpoints"
+        self.transactions_root = self.root / "transactions"
+        self.reconciled_transaction_ids: tuple[str, ...] = ()
         self._ensure_directories()
+        self._reconcile_storage()
 
     def _ensure_directories(self) -> None:
         try:
             self.tasks_root.mkdir(parents=True, exist_ok=True)
             self.checkpoints_root.mkdir(parents=True, exist_ok=True)
+            self.transactions_root.mkdir(parents=True, exist_ok=True)
         except OSError as error:
             raise LocalExecutionStoreError("STORE_UNAVAILABLE") from error
 
@@ -264,6 +269,9 @@ class LocalExecutionStore:
         """Execution-attempt IDs are unique across the complete local store."""
         return self.checkpoints_root / f"{attempt_id}.json"
 
+    def _transaction_path(self, attempt_id: str) -> Path:
+        return self.transactions_root / f"{attempt_id}.json"
+
     @staticmethod
     def _task_to_json(task: StoredTask) -> dict[str, object]:
         return {
@@ -310,6 +318,117 @@ class LocalExecutionStore:
             raise LocalExecutionStoreError("STORE_CORRUPT")
         return checkpoint
 
+    @classmethod
+    def _transaction_to_json(cls, prior_task: StoredTask, updated_task: StoredTask,
+                             checkpoint: StoredCheckpoint) -> dict[str, object]:
+        return {
+            "checkpoint": cls._checkpoint_to_json(checkpoint),
+            "prior_task": cls._task_to_json(prior_task),
+            "schema_version": CHECKPOINT_TRANSACTION_VERSION,
+            "updated_task": cls._task_to_json(updated_task),
+        }
+
+    @classmethod
+    def _transaction_from_json(cls, value: dict[str, object]) -> tuple[StoredTask, StoredTask, StoredCheckpoint]:
+        expected = {"checkpoint", "prior_task", "schema_version", "updated_task"}
+        if (set(value) != expected or value["schema_version"] != CHECKPOINT_TRANSACTION_VERSION or
+                not isinstance(value["checkpoint"], dict) or
+                not isinstance(value["prior_task"], dict) or
+                not isinstance(value["updated_task"], dict)):
+            raise LocalExecutionStoreError("TRANSACTION_CORRUPT")
+        try:
+            checkpoint = cls._checkpoint_from_json(value["checkpoint"])
+            prior_task = cls._task_from_json(value["prior_task"])
+            updated_task = cls._task_from_json(value["updated_task"])
+        except LocalExecutionStoreError as error:
+            raise LocalExecutionStoreError("TRANSACTION_CORRUPT") from error
+        if (prior_task.artifact != updated_task.artifact or
+                checkpoint.task_id != prior_task.artifact.task_id or
+                checkpoint.execution_attempt_id in prior_task.execution_attempt_ids or
+                updated_task.execution_attempt_ids !=
+                prior_task.execution_attempt_ids + (checkpoint.execution_attempt_id,) or
+                updated_task.task_status != checkpoint.task_status or
+                updated_task.review_status != checkpoint.review_status):
+            raise LocalExecutionStoreError("TRANSACTION_CORRUPT")
+        return prior_task, updated_task, checkpoint
+
+    @staticmethod
+    def _remove_transaction(path: Path) -> None:
+        try:
+            path.unlink()
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except FileNotFoundError as error:
+            raise LocalExecutionStoreError("TRANSACTION_MISSING") from error
+        except OSError as error:
+            raise LocalExecutionStoreError("STORE_WRITE_FAILED") from error
+
+    def _reconcile_storage(self) -> None:
+        """Finish only exact, journaled checkpoint commits; reject every other split state."""
+        try:
+            transaction_paths = tuple(sorted(self.transactions_root.glob("*.json")))
+        except OSError as error:
+            raise LocalExecutionStoreError("STORE_READ_FAILED") from error
+        reconciled: list[str] = []
+        for path in transaction_paths:
+            prior_task, updated_task, checkpoint = self._transaction_from_json(self._read_json(path))
+            if path.stem != checkpoint.execution_attempt_id:
+                raise LocalExecutionStoreError("TRANSACTION_CORRUPT")
+            current_task = self.load_task(checkpoint.task_id)
+            checkpoint_path = self._checkpoint_path(checkpoint.execution_attempt_id)
+            if current_task == prior_task:
+                if checkpoint_path.exists():
+                    existing = self.load_checkpoint(checkpoint.task_id, checkpoint.execution_attempt_id)
+                    if existing != checkpoint:
+                        raise LocalExecutionStoreError("TRANSACTION_CHECKPOINT_CONFLICT")
+                else:
+                    try:
+                        self._atomic_create(checkpoint_path, self._checkpoint_to_json(checkpoint))
+                    except LocalExecutionStoreError as error:
+                        if str(error) == "DUPLICATE_RECORD":
+                            raise LocalExecutionStoreError("TRANSACTION_CHECKPOINT_CONFLICT") from None
+                        raise
+                self._atomic_write(self._task_path(checkpoint.task_id), self._task_to_json(updated_task))
+            elif current_task == updated_task:
+                if not checkpoint_path.exists():
+                    raise LocalExecutionStoreError("TRANSACTION_CHECKPOINT_MISSING")
+                existing = self.load_checkpoint(checkpoint.task_id, checkpoint.execution_attempt_id)
+                if existing != checkpoint:
+                    raise LocalExecutionStoreError("TRANSACTION_CHECKPOINT_CONFLICT")
+            else:
+                raise LocalExecutionStoreError("TRANSACTION_TASK_CONFLICT")
+            self._remove_transaction(path)
+            reconciled.append(checkpoint.execution_attempt_id)
+        self.reconciled_transaction_ids = tuple(reconciled)
+        self._validate_checkpoint_inventory()
+
+    def _validate_checkpoint_inventory(self) -> None:
+        """Reject checkpoints not bound to a task record after transaction recovery."""
+        try:
+            task_paths = tuple(sorted(self.tasks_root.glob("*.json")))
+            checkpoint_paths = tuple(sorted(self.checkpoints_root.glob("*.json")))
+        except OSError as error:
+            raise LocalExecutionStoreError("STORE_READ_FAILED") from error
+        bound_attempts: set[str] = set()
+        for path in task_paths:
+            task = self._task_from_json(self._read_json(path))
+            if path.stem != task.artifact.task_id:
+                raise LocalExecutionStoreError("STORE_CORRUPT")
+            for attempt_id in task.execution_attempt_ids:
+                checkpoint = self.load_checkpoint(task.artifact.task_id, attempt_id)
+                if checkpoint.execution_attempt_id != attempt_id:
+                    raise LocalExecutionStoreError("STORE_CORRUPT")
+                bound_attempts.add(attempt_id)
+        for path in checkpoint_paths:
+            checkpoint = self._checkpoint_from_json(self._read_json(path))
+            if path.stem != checkpoint.execution_attempt_id:
+                raise LocalExecutionStoreError("STORE_CORRUPT")
+            if checkpoint.execution_attempt_id not in bound_attempts:
+                raise LocalExecutionStoreError("ORPHANED_CHECKPOINT")
+
     def create_task(self, artifact: SyntheticTaskArtifact, *, task_status: str = "PENDING",
                     review_status: str = "NOT_REVIEWED") -> StoredTask:
         if not _artifact_valid(artifact) or task_status not in TASK_STATUSES or review_status not in REVIEW_STATUSES:
@@ -347,19 +466,30 @@ class LocalExecutionStore:
             checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as error:
             raise LocalExecutionStoreError("STORE_UNAVAILABLE") from error
-        try:
-            self._atomic_create(checkpoint_path, self._checkpoint_to_json(checkpoint))
-        except LocalExecutionStoreError as error:
-            if str(error) == "DUPLICATE_RECORD":
-                raise LocalExecutionStoreError("DUPLICATE_EXECUTION_ATTEMPT_ID") from None
-            raise
         updated = replace(
             task,
             task_status=checkpoint.task_status,
             review_status=checkpoint.review_status,
             execution_attempt_ids=task.execution_attempt_ids + (checkpoint.execution_attempt_id,),
         )
+        transaction_path = self._transaction_path(checkpoint.execution_attempt_id)
+        try:
+            self._atomic_create(
+                transaction_path,
+                self._transaction_to_json(task, updated, checkpoint),
+            )
+        except LocalExecutionStoreError as error:
+            if str(error) == "DUPLICATE_RECORD":
+                raise LocalExecutionStoreError("DUPLICATE_EXECUTION_ATTEMPT_ID") from None
+            raise
+        try:
+            self._atomic_create(checkpoint_path, self._checkpoint_to_json(checkpoint))
+        except LocalExecutionStoreError as error:
+            if str(error) == "DUPLICATE_RECORD":
+                raise LocalExecutionStoreError("DUPLICATE_EXECUTION_ATTEMPT_ID") from None
+            raise
         self._atomic_write(self._task_path(checkpoint.task_id), self._task_to_json(updated))
+        self._remove_transaction(transaction_path)
         return updated
 
     def load_checkpoint(self, task_id: str, attempt_id: str) -> StoredCheckpoint:
@@ -371,6 +501,7 @@ class LocalExecutionStore:
         return checkpoint
 
     def recover_incomplete(self) -> tuple[tuple[StoredTask, StoredCheckpoint | None], ...]:
+        self._reconcile_storage()
         try:
             paths = tuple(sorted(self.tasks_root.glob("*.json")))
         except OSError as error:
