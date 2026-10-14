@@ -18,6 +18,10 @@ from .local_execution import (
     PreflightRequest, StoredCheckpoint, StoredSyntheticResult, StoredTask,
     SyntheticTaskArtifact, default_local_store_root, offline_demo_preflight,
 )
+from .manual_handoff import (
+    ALLOWED_REPOSITORY, MANUAL_HANDOFF_VERSION, ManualHandoffError,
+    ManualHandoffStore, ManualResult, ManualTaskArtifact,
+)
 
 
 DEMO_TASK_ID: Final = "offline-demo-task-v0.11"
@@ -182,6 +186,24 @@ def _store_from_args(path: Path | None) -> LocalExecutionStore:
     )
 
 
+def _manual_store_from_args(path: Path | None) -> ManualHandoffStore:
+    return ManualHandoffStore(path or default_local_store_root(), repository_root=PILOT_REPOSITORY_ROOT)
+
+
+def _manual_result(task, outcome: str, summary: str, tests: str) -> ManualResult:
+    payload = {
+        "schema_version": MANUAL_HANDOFF_VERSION,
+        "task_id": task.artifact.task_id,
+        "task_digest_sha256": task.task_digest_sha256,
+        "outcome": outcome,
+        "summary": summary,
+        "tests": tests,
+    }
+    return ManualResult(**payload, report_digest_sha256=sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest())
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Offline-only local Night Shift workflow demo")
     parser.add_argument("--store", type=Path, help="absolute local runtime directory outside Git")
@@ -192,25 +214,64 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("recover")
     review = commands.add_parser("review")
     review.add_argument("decision", choices=("APPROVED", "REJECTED"))
+    task_command = commands.add_parser("task")
+    task_commands = task_command.add_subparsers(dest="task_command", required=True)
+    create = task_commands.add_parser("create")
+    create.add_argument("--task-id", required=True)
+    create.add_argument("--branch", required=True)
+    create.add_argument("--scope", required=True)
+    show = task_commands.add_parser("show")
+    show.add_argument("task_id")
+    handoff = task_commands.add_parser("handoff")
+    handoff.add_argument("task_id")
+    report = task_commands.add_parser("report")
+    report.add_argument("task_id")
+    report.add_argument("--outcome", choices=("COMPLETED", "UNCERTAIN"), default="COMPLETED")
+    report.add_argument("--summary", required=True)
+    report.add_argument("--tests", required=True)
+    task_review = task_commands.add_parser("review")
+    task_review.add_argument("task_id")
+    task_review.add_argument("decision", choices=("APPROVED", "REJECTED"))
     args = parser.parse_args(argv)
     try:
-        store = _store_from_args(args.store)
-        if args.command == "demo":
-            if args.interrupt_only:
-                _, report = start_interrupted_demo(store)
+        if args.command == "task":
+            store = _manual_store_from_args(args.store)
+            if args.task_command == "create":
+                task = store.create_task(ManualTaskArtifact(
+                    MANUAL_HANDOFF_VERSION, args.task_id, ALLOWED_REPOSITORY, args.branch, args.scope,
+                ))
+                report = {"task": asdict(task)}
+            elif args.task_command == "show":
+                report = {"task": asdict(store.load_task(args.task_id))}
+            elif args.task_command == "handoff":
+                task, prompt = store.handoff(args.task_id)
+                report = {"task": asdict(task), "codex_prompt": prompt, "mode": "MANUAL_COPY_ONLY"}
+            elif args.task_command == "report":
+                task = store.report_result(_manual_result(
+                    store.load_task(args.task_id), args.outcome, args.summary, args.tests,
+                ))
+                report = {"task": asdict(task), "result": asdict(store.load_result(args.task_id))}
             else:
-                report = run_demo(store)
-        elif args.command == "status":
-            report = status_payload(store)
-        elif args.command == "recover":
-            task, result = recover_demo(store)
-            report = {"task_status": task.task_status, "result_sha256": result.result_sha256}
+                task = store.review(args.task_id, args.decision)
+                report = {"task": asdict(task)}
         else:
-            task = store.record_review(DEMO_TASK_ID, args.decision)
-            report = {"task_id": task.artifact.task_id, "review_status": task.review_status}
+            store = _store_from_args(args.store)
+            if args.command == "demo":
+                if args.interrupt_only:
+                    _, report = start_interrupted_demo(store)
+                else:
+                    report = run_demo(store)
+            elif args.command == "status":
+                report = status_payload(store)
+            elif args.command == "recover":
+                task, result = recover_demo(store)
+                report = {"task_status": task.task_status, "result_sha256": result.result_sha256}
+            else:
+                task = store.record_review(DEMO_TASK_ID, args.decision)
+                report = {"task_id": task.artifact.task_id, "review_status": task.review_status}
         print(json.dumps(report, sort_keys=True))
         return 0
-    except (LocalExecutionStoreError, LocalWorkflowError) as error:
+    except (LocalExecutionStoreError, LocalWorkflowError, ManualHandoffError) as error:
         print(json.dumps({"status": "DENIED", "code": str(error)}, sort_keys=True))
         return 2
 
