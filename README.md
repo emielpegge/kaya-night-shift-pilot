@@ -16,3 +16,7 @@ synthetic routing strategies locally and writes only ignored local reports.
 The [v0.3 router integration](docs/NIGHT_SHIFT_ROUTER_INTEGRATION_V0_3.md)
 connects that deterministic router to the existing controller and worker while
 remaining mock-only, manual-only, and fail-closed.
+
+The [v0.4 provider architecture](docs/REAL_AI_PROVIDER_ARCHITECTURE_V0_4.md)
+defines inert, versioned future-provider contracts. It does not implement a
+provider connection or enable live execution.
