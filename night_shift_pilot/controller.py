@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from .contracts import APPROVED_TASK, BoundaryError, SCHEMA_VERSION, approved_spec, digest
+from .contracts import APPROVED_TASK, BoundaryError, SCHEMA_VERSION, approved_spec, digest, verify_approved_spec
 from .router_adapter import routing_handoff, verify_routing_handoff
 
 
@@ -92,10 +92,7 @@ def verify_prepared(prepared: object) -> dict:
     if (prepared.get("schema_version") != SCHEMA_VERSION or prepared.get("phase") != "PREPARED" or
             prepared.get("status") != "READY_FOR_MOCK_WORKER"):
         raise BoundaryError("PREPARED_HANDOFF_CONTRACT_INVALID")
-    spec = prepared.get("spec")
-    canonical_spec = {k: v for k, v in spec.items() if k != "spec_sha256"} if isinstance(spec, dict) else None
-    if not isinstance(spec, dict) or spec.get("spec_sha256") != digest(canonical_spec):
-        raise BoundaryError("SPEC_INTEGRITY_FAILED")
+    spec = verify_approved_spec(prepared.get("spec"))
     if prepared.get("spec_sha256") != spec["spec_sha256"]:
         raise BoundaryError("PREPARED_SPEC_MISMATCH")
     router = verify_routing_handoff(spec, prepared.get("router"))
@@ -115,6 +112,12 @@ def finalize(prepared: dict, result: dict, environment: dict[str, str]) -> dict:
     router = verified["router"]
     if not isinstance(result, dict):
         raise BoundaryError("WORKER_RESULT_INVALID")
+    expected_result_fields = {
+        "schema_version", "mode", "status", "task_id", "run_id", "spec_sha256",
+        "router_decision_sha256", "selected_engine_id", "synthetic_result", "result_sha256",
+    }
+    if set(result) != expected_result_fields:
+        raise BoundaryError("WORKER_RESULT_CONTRACT_INVALID")
     if result.get("spec_sha256") != spec["spec_sha256"]:
         raise BoundaryError("WORKER_RESULT_MISMATCH")
     if (result.get("task_id") != spec["task_id"] or result.get("run_id") != spec["run_id"] or

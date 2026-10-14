@@ -16,7 +16,10 @@ exact value `false` permits any mock phase to proceed.
 
 1. The controller validates manual dispatch, `main`, the emergency stop, branch
    protection, and the sole allowlisted synthetic task.
-2. It creates the existing fixed task spec and maps that specific task to an
+2. It creates the existing fixed task spec. Each later phase reconstructs that
+   full spec with `approved_spec(run_id)` and requires exact equality, including
+   the input, mode, schema version, task ID, run ID, digest, and no extra fields.
+   It then maps that specific task to an
    explicit router `TaskSpec`: documentation, complexity 1, low risk, `writing`
    capability, baseline quality, zero synthetic budget, and no paid approval.
 3. The router evaluates only fixed mock-only profiles. The controller blocks on
@@ -50,13 +53,15 @@ the relevant trust controls.
 Examples of structured stop codes are:
 
 - `NIGHT_SHIFT_STOP_NOT_EXPLICITLY_FALSE`
-- `TASK_NOT_PREAPPROVED` and `ROUTER_TASK_NOT_APPROVED`
+- `TASK_NOT_PREAPPROVED`, `RUN_ID_INVALID`, `APPROVED_SPEC_MISMATCH`, and
+  `ROUTER_TASK_NOT_APPROVED`
 - `ROUTER_NO_EXECUTION`, `ROUTER_ENGINE_UNKNOWN`, and
   `ROUTER_ENGINE_NOT_MOCK_ONLY`
 - `ROUTER_HANDOFF_MISSING`, `ROUTER_TASK_ID_MISMATCH`,
   `ROUTER_DECISION_INTEGRITY_FAILED`, and `ROUTER_DECISION_MISMATCH`
 - `PREPARED_HANDOFF_CONTRACT_INVALID` and `PREPARED_HANDOFF_INTEGRITY_FAILED`
 - `WORKER_ROUTER_RESULT_MISMATCH` and `WORKER_RESULT_INTEGRITY_FAILED`
+- `WORKER_RESULT_CONTRACT_INVALID`
 
 No routing result is execution authority. The fixed controller/environment
 checks must pass independently, and every phase repeats the emergency-stop

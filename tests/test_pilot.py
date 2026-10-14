@@ -113,6 +113,33 @@ class PilotSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(BoundaryError, "ROUTER_DECISION_MISMATCH"):
             verify_prepared(self_consistent_prepared)
 
+    def test_prepared_spec_must_exactly_match_reconstructed_approved_task(self):
+        prepared = prepare(environment(), self.protected)
+        changed_input = prepared["spec"] | {"input": "different synthetic text"}
+        with self.assertRaisesRegex(BoundaryError, "APPROVED_SPEC_MISMATCH"):
+            verify_prepared(prepared | {"spec": changed_input})
+        changed_input["spec_sha256"] = digest({key: value for key, value in changed_input.items() if key != "spec_sha256"})
+        recomputed = prepared | {"spec": changed_input, "spec_sha256": changed_input["spec_sha256"]}
+        recomputed["router"] = routing_handoff(changed_input)
+        recomputed["report_sha256"] = digest({
+            "phase": "PREPARED", "spec_sha256": changed_input["spec_sha256"],
+            "router_decision_sha256": recomputed["router"]["router_decision_sha256"],
+        })
+        with self.assertRaisesRegex(BoundaryError, "APPROVED_SPEC_MISMATCH"):
+            verify_prepared(recomputed)
+        extra_field = prepared["spec"] | {"unexpected": "synthetic"}
+        extra_field["spec_sha256"] = digest({key: value for key, value in extra_field.items() if key != "spec_sha256"})
+        with self.assertRaisesRegex(BoundaryError, "APPROVED_SPEC_MISMATCH"):
+            verify_prepared(prepared | {"spec": extra_field, "spec_sha256": extra_field["spec_sha256"]})
+        missing_field = {key: value for key, value in prepared["spec"].items() if key != "input"}
+        with self.assertRaisesRegex(BoundaryError, "APPROVED_SPEC_MISMATCH"):
+            verify_prepared(prepared | {"spec": missing_field})
+        invalid_run_id = prepared["spec"] | {"run_id": ""}
+        with self.assertRaisesRegex(BoundaryError, "RUN_ID_INVALID"):
+            verify_prepared(prepared | {"spec": invalid_run_id})
+        with self.assertRaisesRegex(BoundaryError, "RUN_ID_INVALID"):
+            verify_prepared(prepared | {"spec": {key: value for key, value in prepared["spec"].items() if key != "run_id"}})
+
     def test_tampered_worker_result_or_task_id_blocks(self):
         prepared = prepare(environment(), self.protected)
         result = run(prepared, "false")
@@ -123,6 +150,11 @@ class PilotSafetyTests(unittest.TestCase):
             {key: value for key, value in self_consistent_result.items() if key != "result_sha256"})
         with self.assertRaisesRegex(BoundaryError, "WORKER_RESULT_INVALID"):
             finalize(prepared, self_consistent_result, environment())
+        extra_result = result | {"unexpected": "synthetic"}
+        extra_result["result_sha256"] = digest(
+            {key: value for key, value in extra_result.items() if key != "result_sha256"})
+        with self.assertRaisesRegex(BoundaryError, "WORKER_RESULT_CONTRACT_INVALID"):
+            finalize(prepared, extra_result, environment())
         wrong_task = result | {"task_id": "other"}
         wrong_task["result_sha256"] = digest({key: value for key, value in wrong_task.items() if key != "result_sha256"})
         with self.assertRaisesRegex(BoundaryError, "WORKER_ROUTER_RESULT_MISMATCH"):
