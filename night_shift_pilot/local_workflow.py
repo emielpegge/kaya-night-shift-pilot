@@ -361,7 +361,15 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, sort_keys=True))
         return 0
     except (LocalExecutionStoreError, LocalWorkflowError, ManualHandoffError) as error:
-        print(json.dumps({"status": "DENIED", "code": str(error)}, sort_keys=True))
+        denied = {"status": "DENIED", "code": str(error)}
+        if (args.command == "quick" and args.quick_command == "status" and
+                str(error) == "STORE_RECORD_MISSING"):
+            denied = {
+                "status": "DENIED",
+                "code": "QUICK_STATUS_TASK_NOT_FOUND",
+                "next_step": "Verify the task ID or create the task with quick start.",
+            }
+        print(json.dumps(denied, sort_keys=True))
         return 2
 
 
