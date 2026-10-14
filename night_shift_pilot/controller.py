@@ -26,8 +26,14 @@ def write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def stopped(value: str | None) -> bool:
-    return (value or "").strip().lower() == "true"
+def execution_enabled(value: str | None) -> bool:
+    """Allow execution only for the exact explicit repository-variable value."""
+    return value == "false"
+
+
+def require_execution_enabled(value: str | None) -> None:
+    if not execution_enabled(value):
+        raise BoundaryError("NIGHT_SHIFT_STOP_NOT_EXPLICITLY_FALSE")
 
 
 def public_branch_protected(repository: str, branch: str, opener=urlopen) -> bool:
@@ -53,8 +59,7 @@ def verify_environment(environment: dict[str, str], branch_check=public_branch_p
         raise BoundaryError("MANUAL_DISPATCH_REQUIRED")
     if environment.get("GITHUB_REF") != "refs/heads/main":
         raise BoundaryError("MAIN_REF_REQUIRED")
-    if stopped(environment.get("NIGHT_SHIFT_STOP")):
-        raise BoundaryError("EMERGENCY_STOP")
+    require_execution_enabled(environment.get("NIGHT_SHIFT_STOP"))
     if environment.get("APPROVED_TASK") != APPROVED_TASK:
         raise BoundaryError("TASK_NOT_PREAPPROVED")
     branch_check(environment.get("GITHUB_REPOSITORY", ""), "main")
@@ -75,8 +80,7 @@ def prepare(environment: dict[str, str], branch_check=public_branch_protected) -
 
 
 def finalize(prepared: dict, result: dict, environment: dict[str, str]) -> dict:
-    if stopped(environment.get("NIGHT_SHIFT_STOP")):
-        raise BoundaryError("EMERGENCY_STOP")
+    require_execution_enabled(environment.get("NIGHT_SHIFT_STOP"))
     spec = prepared.get("spec")
     canonical_spec = {k: v for k, v in spec.items() if k != "spec_sha256"} if isinstance(spec, dict) else None
     if not isinstance(spec, dict) or spec.get("spec_sha256") != digest(canonical_spec):

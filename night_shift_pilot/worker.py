@@ -7,12 +7,11 @@ import os
 from pathlib import Path
 
 from .contracts import BoundaryError, SCHEMA_VERSION, digest
-from .controller import stopped, write_json
+from .controller import require_execution_enabled, write_json
 
 
 def run(prepared: dict, stop_value: str | None) -> dict:
-    if stopped(stop_value):
-        raise BoundaryError("EMERGENCY_STOP")
+    require_execution_enabled(stop_value)
     spec = prepared.get("spec")
     canonical_spec = {k: v for k, v in spec.items() if k != "spec_sha256"} if isinstance(spec, dict) else None
     if not isinstance(spec, dict) or spec.get("spec_sha256") != digest(canonical_spec):

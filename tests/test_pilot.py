@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 
 from night_shift_pilot.contracts import APPROVED_TASK, BoundaryError
 from night_shift_pilot.controller import finalize, prepare, verify_environment
@@ -35,7 +38,6 @@ class PilotSafetyTests(unittest.TestCase):
         cases = [
             (environment(GITHUB_EVENT_NAME="schedule"), "MANUAL_DISPATCH_REQUIRED"),
             (environment(GITHUB_REF="refs/heads/feature/x"), "MAIN_REF_REQUIRED"),
-            (environment(NIGHT_SHIFT_STOP="true"), "EMERGENCY_STOP"),
             (environment(APPROVED_TASK="other"), "TASK_NOT_PREAPPROVED"),
         ]
         for values, code in cases:
@@ -45,13 +47,27 @@ class PilotSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(BoundaryError, "MAIN_NOT_PROTECTED"):
             verify_environment(environment(), lambda *_: (_ for _ in ()).throw(BoundaryError("MAIN_NOT_PROTECTED")))
 
-    def test_stop_blocks_worker_and_finalizer(self):
+    def test_only_exact_false_allows_prepare_worker_and_finalize(self):
         prepared = prepare(environment(), self.protected)
-        with self.assertRaisesRegex(BoundaryError, "EMERGENCY_STOP"):
-            run(prepared, "true")
         result = run(prepared, "false")
-        with self.assertRaisesRegex(BoundaryError, "EMERGENCY_STOP"):
-            finalize(prepared, result, environment(NIGHT_SHIFT_STOP="true"))
+        self.assertEqual(finalize(prepared, result, environment())["status"], "MOCK_COMPLETED_NO_PUBLICATION")
+        blocked_values = (None, "", " ", "true", "TRUE", "False", "0", "false ")
+        blocked_environments = [environment(NIGHT_SHIFT_STOP=value) for value in blocked_values]
+        missing = environment()
+        missing.pop("NIGHT_SHIFT_STOP")
+        blocked_environments.append(missing)
+        for blocked_environment in blocked_environments:
+            value = blocked_environment.get("NIGHT_SHIFT_STOP")
+            label = "missing" if "NIGHT_SHIFT_STOP" not in blocked_environment else repr(value)
+            with self.subTest(phase="prepare", value=label):
+                with self.assertRaisesRegex(BoundaryError, "NIGHT_SHIFT_STOP_NOT_EXPLICITLY_FALSE"):
+                    prepare(blocked_environment, self.protected)
+            with self.subTest(phase="worker", value=label):
+                with self.assertRaisesRegex(BoundaryError, "NIGHT_SHIFT_STOP_NOT_EXPLICITLY_FALSE"):
+                    run(prepared, value)
+            with self.subTest(phase="finalize", value=label):
+                with self.assertRaisesRegex(BoundaryError, "NIGHT_SHIFT_STOP_NOT_EXPLICITLY_FALSE"):
+                    finalize(prepared, result, blocked_environment)
 
     def test_tampered_handoff_never_finalizes(self):
         prepared = prepare(environment(), self.protected)
@@ -81,6 +97,35 @@ class PilotSafetyTests(unittest.TestCase):
         self.assertTrue(all(name in {
             "actions/checkout", "actions/setup-python", "actions/upload-artifact", "actions/download-artifact"
         } for name, _ in actions))
+
+    def test_public_safety_audit_detects_canary_in_deleted_intermediate_commit(self):
+        audit = Path("scripts/public_safety_audit.py").resolve()
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            def git(*args):
+                return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+            git("init", "--initial-branch=main")
+            git("config", "user.name", "Synthetic Tester")
+            git("config", "user.email", "synthetic@users.noreply.github.com")
+            (repo / "docs").mkdir()
+            (repo / "docs" / "safe.md").write_text("safe synthetic baseline\n", encoding="utf-8")
+            git("add", ".")
+            git("commit", "-m", "Synthetic baseline")
+            git("switch", "-c", "feature/transient-canary")
+            canary = "-----BEGIN " + "SYNTHETIC PRIVATE KEY-----"
+            transient = repo / "docs" / "transient.md"
+            transient.write_text(canary + "\n", encoding="utf-8")
+            git("add", ".")
+            git("commit", "-m", "Add synthetic canary")
+            transient.unlink()
+            git("add", ".")
+            git("commit", "-m", "Remove synthetic canary")
+            result = subprocess.run(
+                [sys.executable, str(audit), "--repository", str(repo), "--base-ref", "main"],
+                check=False, capture_output=True, text=True,
+            )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("denied public-content pattern in feature-branch commit", result.stdout)
 
 
 if __name__ == "__main__":

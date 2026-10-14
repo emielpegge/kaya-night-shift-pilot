@@ -15,9 +15,11 @@ the handoff and emits a final artifact report. It never creates a commit, branch
 pull request, deployment, release, schedule, or external AI request.
 
 The controller checks `NIGHT_SHIFT_STOP` before prepare and finalization; the
-worker checks it before processing. A value of `true` blocks safely. An
-interruption creates no remote state: do not rerun automatically; inspect any
-available artifact and authorize a new manual attempt separately.
+worker checks it before processing. Execution is allow-only: only the exact value
+`false` permits it. Missing, empty, whitespace-padded, mixed-case, `true`, and
+all other values block safely. An interruption creates no remote state: do not
+rerun automatically; inspect any available artifact and authorize a new manual
+attempt separately.
 
 ## Preconditions for a later, separately approved run
 
@@ -33,7 +35,7 @@ available artifact and authorize a new manual attempt separately.
 
 ## Acceptance criteria
 
-- With the stop variable true: `controller-prepare` is blocked, the worker does
+- With the stop variable true, absent, empty, or invalid: `controller-prepare` is blocked, the worker does
   not run, and the controller artifact reports `EMERGENCY_STOP`.
 - With the stop variable false and protection visible: controller, worker and
   finalizer complete, and the final artifact reports
