@@ -29,3 +29,8 @@ The [v0.6 feasibility record](docs/CODEX_V0_6_GO_NO_GO.md) is now
 subscription-only: it records a manual, quota-gated design and explicit NO-GO
 for unmanaged execution. It does not add a provider connection or change the
 live denial.
+
+The [v0.7 quota-monitor design](docs/QUOTA_MONITOR_GO_NO_GO_V0_7.md) adds only
+offline App Server quota normalization, conceptual recheck planning and
+checkpoint contracts. It remains NO-GO for a live connector and cannot start
+or resume AI work.
