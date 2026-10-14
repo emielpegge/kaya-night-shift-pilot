@@ -47,3 +47,9 @@ unattended execution.
 The [v0.10 local execution foundation](docs/LOCAL_EXECUTION_FOUNDATION_V0_10.md)
 adds persistent synthetic task/checkpoint state and an offline preflight only;
 it cannot invoke Codex or authorize a provider start.
+
+The v0.11 offline demo can be run in an empty local runtime directory with
+`NIGHT_SHIFT_STOP=true python3 -m night_shift_pilot.local_workflow --store /absolute/runtime demo`.
+It requires that exact active stop value and records only a synthetic result.
+Its approval is explicitly simulated, not a human decision; use `review` to
+record a local human approval or rejection.
