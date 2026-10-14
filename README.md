@@ -20,3 +20,7 @@ remaining mock-only, manual-only, and fail-closed.
 The [v0.4 provider architecture](docs/REAL_AI_PROVIDER_ARCHITECTURE_V0_4.md)
 defines inert, versioned future-provider contracts. It does not implement a
 provider connection or enable live execution.
+
+The [v0.5 Codex-first design](docs/CODEX_FIRST_EXECUTION_ARCHITECTURE_V0_5.md)
+adds only inert private-boundary, grant and accounting design contracts; every
+live request remains denied.
