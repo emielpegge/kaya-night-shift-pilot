@@ -43,3 +43,7 @@ The [v0.9 local-subscription feasibility record](docs/LOCAL_SUBSCRIPTION_GO_NO_G
 separates documented local Codex capabilities from KAYA's authorization and
 zero-cost requirements. It permits no live integration and remains NO-GO for
 unattended execution.
+
+The [v0.10 local execution foundation](docs/LOCAL_EXECUTION_FOUNDATION_V0_10.md)
+adds persistent synthetic task/checkpoint state and an offline preflight only;
+it cannot invoke Codex or authorize a provider start.
