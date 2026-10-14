@@ -64,6 +64,16 @@ class StoredCheckpoint:
 
 
 @dataclass(frozen=True)
+class StoredSyntheticResult:
+    schema_version: str
+    task_id: str
+    execution_attempt_id: str
+    status: str
+    synthetic_result: str
+    result_sha256: str
+
+
+@dataclass(frozen=True)
 class PreflightRequest:
     task: StoredTask
     repository: str
@@ -150,6 +160,24 @@ def _checkpoint_valid(checkpoint: object) -> bool:
     return checkpoint.task_status != "UNKNOWN_PROVIDER_OUTCOME"
 
 
+def _synthetic_result_digest(result: StoredSyntheticResult) -> str:
+    return _digest({
+        "schema_version": result.schema_version,
+        "task_id": result.task_id,
+        "execution_attempt_id": result.execution_attempt_id,
+        "status": result.status,
+        "synthetic_result": result.synthetic_result,
+    })
+
+
+def _synthetic_result_valid(result: object) -> bool:
+    return (isinstance(result, StoredSyntheticResult) and
+            result.schema_version == LOCAL_EXECUTION_VERSION and
+            _opaque_id(result.task_id) and _opaque_id(result.execution_attempt_id) and
+            result.status == "SYNTHETIC_RESULT_READY" and _text(result.synthetic_result) and
+            result.result_sha256 == _synthetic_result_digest(result))
+
+
 def default_local_store_root() -> Path:
     """Return a per-user runtime location that is outside a repository by default."""
     return Path.home() / ".local" / "state" / "kaya-night-shift"
@@ -169,6 +197,7 @@ class LocalExecutionStore:
                 raise LocalExecutionStoreError("STORE_ROOT_INSIDE_REPOSITORY")
         self.tasks_root = self.root / "tasks"
         self.checkpoints_root = self.root / "checkpoints"
+        self.results_root = self.root / "results"
         self.transactions_root = self.root / "transactions"
         self.reconciled_transaction_ids: tuple[str, ...] = ()
         self._ensure_directories()
@@ -178,6 +207,7 @@ class LocalExecutionStore:
         try:
             self.tasks_root.mkdir(parents=True, exist_ok=True)
             self.checkpoints_root.mkdir(parents=True, exist_ok=True)
+            self.results_root.mkdir(parents=True, exist_ok=True)
             self.transactions_root.mkdir(parents=True, exist_ok=True)
         except OSError as error:
             raise LocalExecutionStoreError("STORE_UNAVAILABLE") from error
@@ -272,6 +302,9 @@ class LocalExecutionStore:
     def _transaction_path(self, attempt_id: str) -> Path:
         return self.transactions_root / f"{attempt_id}.json"
 
+    def _result_path(self, task_id: str) -> Path:
+        return self.results_root / f"{task_id}.json"
+
     @staticmethod
     def _task_to_json(task: StoredTask) -> dict[str, object]:
         return {
@@ -317,6 +350,26 @@ class LocalExecutionStore:
         if not _checkpoint_valid(checkpoint):
             raise LocalExecutionStoreError("STORE_CORRUPT")
         return checkpoint
+
+    @staticmethod
+    def _result_to_json(result: StoredSyntheticResult) -> dict[str, object]:
+        return asdict(result)
+
+    @staticmethod
+    def _result_from_json(value: dict[str, object]) -> StoredSyntheticResult:
+        expected = {
+            "schema_version", "task_id", "execution_attempt_id", "status",
+            "synthetic_result", "result_sha256",
+        }
+        if set(value) != expected:
+            raise LocalExecutionStoreError("STORE_CORRUPT")
+        try:
+            result = StoredSyntheticResult(**value)
+        except TypeError as error:
+            raise LocalExecutionStoreError("STORE_CORRUPT") from error
+        if not _synthetic_result_valid(result):
+            raise LocalExecutionStoreError("STORE_CORRUPT")
+        return result
 
     @classmethod
     def _transaction_to_json(cls, prior_task: StoredTask, updated_task: StoredTask,
@@ -410,6 +463,7 @@ class LocalExecutionStore:
         try:
             task_paths = tuple(sorted(self.tasks_root.glob("*.json")))
             checkpoint_paths = tuple(sorted(self.checkpoints_root.glob("*.json")))
+            result_paths = tuple(sorted(self.results_root.glob("*.json")))
         except OSError as error:
             raise LocalExecutionStoreError("STORE_READ_FAILED") from error
         bound_attempts: set[str] = set()
@@ -428,6 +482,13 @@ class LocalExecutionStore:
                 raise LocalExecutionStoreError("STORE_CORRUPT")
             if checkpoint.execution_attempt_id not in bound_attempts:
                 raise LocalExecutionStoreError("ORPHANED_CHECKPOINT")
+        for path in result_paths:
+            result = self._result_from_json(self._read_json(path))
+            if path.stem != result.task_id:
+                raise LocalExecutionStoreError("STORE_CORRUPT")
+            task = self.load_task(result.task_id)
+            if result.execution_attempt_id not in task.execution_attempt_ids:
+                raise LocalExecutionStoreError("ORPHANED_SYNTHETIC_RESULT")
 
     def create_task(self, artifact: SyntheticTaskArtifact, *, task_status: str = "PENDING",
                     review_status: str = "NOT_REVIEWED") -> StoredTask:
@@ -449,6 +510,15 @@ class LocalExecutionStore:
         if not _opaque_id(task_id):
             raise LocalExecutionStoreError("TASK_ID_INVALID")
         return self._task_from_json(self._read_json(self._task_path(task_id)))
+
+    def record_review(self, task_id: str, review_status: str) -> StoredTask:
+        """Persist a human review decision without changing the task execution state."""
+        if review_status not in {"APPROVED", "REJECTED"}:
+            raise LocalExecutionStoreError("REVIEW_STATUS_INVALID")
+        task = self.load_task(task_id)
+        updated = replace(task, review_status=review_status)
+        self._atomic_write(self._task_path(task_id), self._task_to_json(updated))
+        return updated
 
     def save_checkpoint(self, checkpoint: StoredCheckpoint) -> StoredTask:
         if not _checkpoint_valid(checkpoint):
@@ -500,6 +570,27 @@ class LocalExecutionStore:
             raise LocalExecutionStoreError("CHECKPOINT_TASK_MISMATCH")
         return checkpoint
 
+    def save_synthetic_result(self, result: StoredSyntheticResult) -> StoredSyntheticResult:
+        """Persist one fixed-format synthetic result; it is never provider output."""
+        if not _synthetic_result_valid(result):
+            raise LocalExecutionStoreError("SYNTHETIC_RESULT_INVALID")
+        task = self.load_task(result.task_id)
+        if (task.task_status != "RUNNING" or
+                result.execution_attempt_id not in task.execution_attempt_ids):
+            raise LocalExecutionStoreError("SYNTHETIC_RESULT_NOT_ELIGIBLE")
+        try:
+            self._atomic_create(self._result_path(result.task_id), self._result_to_json(result))
+        except LocalExecutionStoreError as error:
+            if str(error) == "DUPLICATE_RECORD":
+                raise LocalExecutionStoreError("DUPLICATE_SYNTHETIC_RESULT") from None
+            raise
+        return result
+
+    def load_synthetic_result(self, task_id: str) -> StoredSyntheticResult:
+        if not _opaque_id(task_id):
+            raise LocalExecutionStoreError("TASK_ID_INVALID")
+        return self._result_from_json(self._read_json(self._result_path(task_id)))
+
     def recover_incomplete(self) -> tuple[tuple[StoredTask, StoredCheckpoint | None], ...]:
         self._reconcile_storage()
         try:
@@ -516,12 +607,12 @@ class LocalExecutionStore:
         return tuple(recovered)
 
 
-def dry_run_preflight(request: object) -> PreflightDecision:
-    """Evaluate only offline boundaries for a hypothetical future local start."""
+def _evaluate_preflight(request: object, *, required_stop_value: str,
+                        success_code: str, stop_code: str) -> PreflightDecision:
     if not isinstance(request, PreflightRequest) or not _stored_task_valid(request.task):
         return PreflightDecision("DENIED", "PREFLIGHT_REQUEST_INVALID")
-    if request.emergency_stop != "false":
-        return PreflightDecision("DENIED", "NIGHT_SHIFT_STOP_NOT_EXPLICITLY_FALSE")
+    if request.emergency_stop != required_stop_value:
+        return PreflightDecision("DENIED", stop_code)
     if request.human_authorized is not True or request.task.review_status != "APPROVED":
         return PreflightDecision("DENIED", "HUMAN_AUTHORIZATION_REQUIRED")
     artifact = request.task.artifact
@@ -554,4 +645,24 @@ def dry_run_preflight(request: object) -> PreflightDecision:
             request.previous_provider_outcome_uncertain or
             request.task.task_status == "UNKNOWN_PROVIDER_OUTCOME"):
         return PreflightDecision("DENIED", "PREVIOUS_PROVIDER_OUTCOME_UNCERTAIN")
-    return PreflightDecision("ALLOWED", "OFFLINE_PREFLIGHT_ONLY")
+    return PreflightDecision("ALLOWED", success_code)
+
+
+def dry_run_preflight(request: object) -> PreflightDecision:
+    """Evaluate only offline boundaries for a hypothetical future local start."""
+    return _evaluate_preflight(
+        request,
+        required_stop_value="false",
+        success_code="OFFLINE_PREFLIGHT_ONLY",
+        stop_code="NIGHT_SHIFT_STOP_NOT_EXPLICITLY_FALSE",
+    )
+
+
+def offline_demo_preflight(request: object) -> PreflightDecision:
+    """Allow only the synthetic demo while the global stop remains explicitly active."""
+    return _evaluate_preflight(
+        request,
+        required_stop_value="true",
+        success_code="OFFLINE_DEMO_ONLY",
+        stop_code="OFFLINE_DEMO_REQUIRES_ACTIVE_STOP",
+    )
