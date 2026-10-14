@@ -9,3 +9,6 @@ It is deliberately **not** a production automation system.
 The [Intelligent Engine Router v0.1](docs/INTELLIGENT_ENGINE_ROUTER_V0_1.md) is
 a separate deterministic synthetic decision component with no workflow or
 provider integration.
+
+The [v0.2 simulation](docs/INTELLIGENT_ENGINE_ROUTER_V0_2_SIMULATION.md) compares
+synthetic routing strategies locally and writes only ignored local reports.
