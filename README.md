@@ -38,3 +38,8 @@ or resume AI work.
 The [v0.8 subscription-integration feasibility record](docs/SUBSCRIPTION_INTEGRATION_GO_NO_GO_V0_8.md)
 compares current official local and hosted routes, documents the zero-additional-
 cost boundary, and remains NO-GO for live Night Shift subscription integration.
+
+The [v0.9 local-subscription feasibility record](docs/LOCAL_SUBSCRIPTION_GO_NO_GO_V0_9.md)
+separates documented local Codex capabilities from KAYA's authorization and
+zero-cost requirements. It permits no live integration and remains NO-GO for
+unattended execution.
