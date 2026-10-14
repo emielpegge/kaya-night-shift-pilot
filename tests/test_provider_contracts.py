@@ -47,7 +47,7 @@ def policy(**overrides) -> ExecutionPolicy:
 
 class ProviderContractSafetyTests(unittest.TestCase):
     def execute(self, **overrides):
-        return InertMockProviderAdapter(capability()).execute(
+        return InertMockProviderAdapter(overrides.pop("capability", capability())).execute(
             overrides.pop("request", request()), overrides.pop("authorization", authorization()),
             overrides.pop("policy", policy()), overrides.pop("emergency_stop", "false"))
 
@@ -79,8 +79,9 @@ class ProviderContractSafetyTests(unittest.TestCase):
 
     def test_paid_mock_contract_requires_separate_paid_approval(self):
         paid_request = request(maximum_cost=1)
-        paid_policy = policy(maximum_cost_per_task=1)
-        self.assert_denied(self.execute(request=paid_request, policy=paid_policy), "PAID_CALL_NOT_APPROVED")
+        paid_policy = policy(maximum_cost_per_task=1, maximum_cost_per_night=1)
+        self.assert_denied(self.execute(request=paid_request, policy=paid_policy,
+            capability=capability(maximum_declared_cost=1)), "PAID_CALL_NOT_APPROVED")
 
     def test_active_emergency_stop_and_non_mock_provider_block(self):
         self.assert_denied(self.execute(emergency_stop="true"), "NIGHT_SHIFT_STOP_NOT_EXPLICITLY_FALSE")
@@ -91,6 +92,30 @@ class ProviderContractSafetyTests(unittest.TestCase):
     def test_invalid_contract_or_timeout_blocks_without_execution(self):
         self.assert_denied(self.execute(request=request(contract_version="other")), "EXECUTION_REQUEST_INVALID")
         self.assert_denied(self.execute(request=request(timeout_seconds=31)), "TIMEOUT_NOT_AUTHORIZED")
+
+    def test_malformed_inputs_always_return_structured_denials(self):
+        cases = (
+            ("none", {"request": None}, "EXECUTION_REQUEST_INVALID"),
+            ("wrong-request-type", {"request": []}, "EXECUTION_REQUEST_INVALID"),
+            ("missing-request-value", {"request": request(request_id="")}, "EXECUTION_REQUEST_INVALID"),
+            ("invalid-request-number", {"request": request(maximum_cost=True)}, "EXECUTION_REQUEST_INVALID"),
+            ("invalid-capability-object", {"capability": object()}, "PROVIDER_CAPABILITY_INVALID"),
+            ("invalid-capability-value", {"capability": capability(maximum_capacity=True)}, "PROVIDER_CAPABILITY_INVALID"),
+            ("invalid-authorization", {"authorization": None}, "EXECUTION_AUTHORIZATION_MISSING"),
+            ("invalid-policy", {"policy": None}, "EXECUTION_POLICY_INVALID"),
+            ("invalid-policy-number", {"policy": policy(maximum_cost_per_task=True)}, "EXECUTION_POLICY_INVALID"),
+        )
+        for label, overrides, code in cases:
+            with self.subTest(label=label):
+                self.assert_denied(self.execute(**overrides), code)
+
+    def test_static_cost_unit_limits_capacity_and_timeout_contracts_block(self):
+        self.assert_denied(self.execute(request=request(cost_unit="other")), "COST_UNIT_MISMATCH")
+        self.assert_denied(self.execute(capability=capability(cost_unit="other")), "COST_UNIT_MISMATCH")
+        self.assert_denied(self.execute(request=request(maximum_cost=1), policy=policy(maximum_cost_per_task=1,
+            maximum_cost_per_night=0)), "BUDGET_NOT_AUTHORIZED")
+        self.assert_denied(self.execute(capability=capability(maximum_capacity=0)), "CAPACITY_UNAVAILABLE_STATIC")
+        self.assert_denied(self.execute(capability=capability(timeout_seconds=29)), "TIMEOUT_NOT_AUTHORIZED")
 
 
 if __name__ == "__main__":

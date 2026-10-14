@@ -46,6 +46,23 @@ deterministic synthetic marker after policy checks and cannot call a provider.
 The `ProviderAdapter` protocol is a future seam, not permission to implement a
 live adapter.
 
+### Static v0.4 validation versus dynamic enforcement
+
+v0.4 **does** statically validate that request, policy, and capability contract
+versions are valid; IDs and allowlists match; all three cost units agree;
+per-task and declared provider cost ceilings are non-negative and consistent;
+the stated night ceiling is not below a single request; timeout and static
+capacity declarations are valid; and a paid mock request has separate approval.
+It rejects a zero declared capacity for its inert mock response.
+
+v0.4 **does not** reserve or debit a night budget, count concurrent capacity,
+consume a rate limit, query provider usage, refresh a provider quota, or keep a
+durable execution ledger. `maximum_cost_per_night`, `maximum_rate_per_night`,
+and `maximum_capacity` are therefore contract declarations, not dynamic
+enforcement. A future live executor must fail closed until it has an atomic,
+durable budget reservation, capacity/rate accounting, idempotency, and recovery
+design. It must not infer that these v0.4 fields make a live call safe.
+
 No contract field grants authority through model output or instruction text.
 Future requests must bind a reviewed task artifact and digest; they must not
 carry shell commands, arbitrary tool permissions, secrets, or free-form write
