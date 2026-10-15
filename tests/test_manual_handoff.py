@@ -176,6 +176,11 @@ class ManualHandoffTests(unittest.TestCase):
         exit_code, denied = self.run_quick_cli("status", TASK_ID)
         self.assertEqual((exit_code, denied["code"]), (2, "STORE_CORRUPT"))
 
+    def test_quick_status_unknown_task_has_clear_next_action(self):
+        exit_code, denied = self.run_quick_cli("status", "unknown-manual-task")
+        self.assertEqual((exit_code, denied["code"]), (2, "QUICK_STATUS_TASK_NOT_FOUND"))
+        self.assertEqual(denied["next_step"], "Verify the task ID or create the task with quick start.")
+
     def test_corrupt_result_and_duplicate_task_id_block(self):
         store = self.store()
         store.create_task(artifact())
